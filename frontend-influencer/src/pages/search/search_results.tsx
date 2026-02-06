@@ -88,7 +88,6 @@ export function SearchResultsPage() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [selectedInfluencerName, setSelectedInfluencerName] = useState<string>("")
 
-  const selectedCampaignId = useMemo(() => filters?.campaignId, [filters])
   const totalPages = Math.max(1, Math.ceil(influencers.length / ITEMS_PER_PAGE))
   const paginatedInfluencers = useMemo(() => {
     const start = (currentPage - 1) * ITEMS_PER_PAGE
