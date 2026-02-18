@@ -20,62 +20,62 @@ export function CampaignDetailScreen() {
 
   if (!campaign) {
     return (
-      <div className="space-y-4">
-        <p className="text-sm text-red-600">No campaign data. Go back and select a campaign.</p>
+      <div className="flex flex-col gap-4">
+        <p className="text-sm text-red-600">キャンペーン情報がないよ。戻って選んでね。</p>
         <Button variant="outline" onClick={() => navigate("/campaign")}>
-          Back to Campaigns
+          一覧に戻る
         </Button>
       </div>
     )
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+        <div className="section-title font-display">{campaign.name}</div>
+        <div className="section-subtitle">{campaign.status ?? "下書き"}</div>
+      </div>
       <Button variant="outline" onClick={() => navigate("/campaign")}>
-        Back to Campaigns
+        一覧に戻る
       </Button>
-      <div className="space-y-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-3xl font-semibold leading-tight">{campaign.name}</h1>
-          <span className="rounded-full bg-muted px-3 py-1 text-xs uppercase tracking-wide text-muted-foreground">
-            {campaign.status ?? "draft"}
-          </span>
-        </div>
+    </div>
+      <div className="rounded-2xl border border-border/70 bg-card/80 p-6 shadow-[0_10px_30px_-20px_rgba(15,23,42,0.45)] backdrop-blur">
         {campaign.description && (
           <p className="text-base text-foreground">{campaign.description}</p>
         )}
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="mt-5 grid gap-4 md:grid-cols-3">
           <div className="space-y-1">
-            <p className="text-xs text-muted-foreground uppercase tracking-wide">Dates</p>
+            <p className="text-xs text-muted-foreground uppercase tracking-wide">期間</p>
             <p className="text-sm text-foreground">
-              {campaign.start_date ?? "N/A"} – {campaign.end_date ?? "N/A"}
+              {campaign.start_date ?? "未設定"} – {campaign.end_date ?? "未設定"}
             </p>
           </div>
           <div className="space-y-1">
-            <p className="text-xs text-muted-foreground uppercase tracking-wide">Budget</p>
+            <p className="text-xs text-muted-foreground uppercase tracking-wide">予算</p>
             <p className="text-sm text-foreground">
-              {campaign.budget !== null ? campaign.budget : "N/A"}
+              {campaign.budget !== null ? campaign.budget : "未設定"}
             </p>
           </div>
           <div className="space-y-1">
-            <p className="text-xs text-muted-foreground uppercase tracking-wide">Goal</p>
+            <p className="text-xs text-muted-foreground uppercase tracking-wide">目標</p>
             <p className="text-sm text-foreground">
-              {campaign.goal ?? "N/A"}
+              {campaign.goal ?? "未設定"}
             </p>
           </div>
         </div>
-      <div className="space-y-1">
-        <p className="text-xs text-muted-foreground uppercase tracking-wide">Influencers</p>
-        <p className="text-sm text-foreground">
-          {campaign.influencers ?? "N/A"}
-        </p>
+        <div className="mt-4 space-y-1">
+          <p className="text-xs text-muted-foreground uppercase tracking-wide">インフルエンサー</p>
+          <p className="text-sm text-foreground">
+            {campaign.influencers ?? "未設定"}
+          </p>
+        </div>
+      </div>
+      <div className="pt-2">
+        <Button onClick={() => navigate("/campaign/edit", { state: { campaign } })}>
+          編集する
+        </Button>
       </div>
     </div>
-    <div className="pt-2">
-      <Button onClick={() => navigate("/campaign/edit", { state: { campaign } })}>
-        Edit Campaign
-      </Button>
-    </div>
-  </div>
   )
 }

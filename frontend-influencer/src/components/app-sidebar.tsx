@@ -45,20 +45,20 @@ export function AppSidebar({
 }: AppSidebarProps) {
   const items: SidebarItem[] = [
     {
-      title: "Home",
+      title: "ホーム",
       url: homeUrl,
       icon: Home,
       key: "home",
     },
     {
-      title: "Search",
-      url: searchUrl,
+      title: "検索",
+      url: activeItem === "search" ? "/search/search" : searchUrl,
       icon: Search,
       key: "search",
     },
     {
-      title: "Campaign",
-      url: campaignUrl,
+      title: "キャンペーン",
+      url: activeItem === "campaign" ? "/campaign" : campaignUrl,
       icon: Inbox,
       key: "campaign",
     },
@@ -68,7 +68,7 @@ export function AppSidebar({
     <Sidebar>
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Application</SidebarGroupLabel>
+          <SidebarGroupLabel>メニュー</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {items.map((item) => (
@@ -93,7 +93,7 @@ export function AppSidebar({
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <SidebarMenuButton>
-                    <User2 /> Username
+                    <User2 /> ユーザー
                     <ChevronUp className="ml-auto" />
                   </SidebarMenuButton>
                 </DropdownMenuTrigger>
@@ -102,10 +102,10 @@ export function AppSidebar({
                   className="w-[--radix-popper-anchor-width]"
                 >
                   <DropdownMenuItem>
-                    <span>Account</span>
+                    <span>アカウント</span>
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={onSignOut}>
-                    <span>Sign out</span>
+                    <span>ログアウト</span>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

@@ -40,10 +40,10 @@ export function CampaignEditScreen() {
 
   if (!campaign) {
     return (
-      <div className="space-y-4">
-        <p className="text-sm text-red-600">No campaign to edit.</p>
+      <div className="flex flex-col gap-4">
+        <p className="text-sm text-red-600">編集するキャンペーンがないよ。</p>
         <Button variant="outline" onClick={() => navigate("/campaign")}>
-          Back to Campaigns
+          一覧に戻る
         </Button>
       </div>
     )
@@ -58,12 +58,12 @@ export function CampaignEditScreen() {
 
   const handleUpdate = async () => {
     if (!user) {
-      setError("You must be signed in to edit a campaign.")
+      setError("ログインしてから編集してね。")
       return
     }
 
     if (!dateRange?.from || !dateRange?.to) {
-      setError("Please select a start and end date.")
+      setError("開始日と終了日を選んでね。")
       return
     }
 
@@ -95,15 +95,21 @@ export function CampaignEditScreen() {
   }
 
   return (
-    <div className="space-y-4">
-      <Button variant="outline" onClick={() => navigate(-1)}>
-        Back
-      </Button>
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="section-title font-display">キャンペーン編集</div>
+          <div className="section-subtitle">内容を整えておこう。</div>
+        </div>
+        <Button variant="outline" onClick={() => navigate(-1)}>
+          戻る
+        </Button>
+      </div>
       <FieldSet>
-        <FieldLegend>Edit Campaign</FieldLegend>
+        <FieldLegend className="font-display text-lg">キャンペーン詳細</FieldLegend>
         <FieldGroup className="flex-row items-start gap-4">
           <Field className="flex-1 min-w-[220px] basis-0 w-auto">
-            <FieldLabel htmlFor="name">Campaign name</FieldLabel>
+            <FieldLabel htmlFor="name">キャンペーン名</FieldLabel>
             <Input
               id="name"
               value={formValues.name}
@@ -111,7 +117,7 @@ export function CampaignEditScreen() {
             />
           </Field>
           <Field className="flex-1 min-w-[220px] basis-0 w-auto">
-            <FieldLabel htmlFor="description">Description</FieldLabel>
+            <FieldLabel htmlFor="description">説明</FieldLabel>
             <Input
               id="description"
               value={formValues.description}
@@ -119,7 +125,7 @@ export function CampaignEditScreen() {
             />
           </Field>
           <Field className="flex-1 min-w-[220px] basis-0 w-auto">
-            <FieldLabel htmlFor="budget">Budget</FieldLabel>
+            <FieldLabel htmlFor="budget">予算</FieldLabel>
             <Input
               id="budget"
               type="number"
@@ -128,7 +134,7 @@ export function CampaignEditScreen() {
             />
           </Field>
           <Field className="flex-1 min-w-[220px] basis-0 w-auto">
-            <FieldLabel htmlFor="goal">Goal</FieldLabel>
+            <FieldLabel htmlFor="goal">目標</FieldLabel>
             <Input
               id="goal"
               value={formValues.goal}
@@ -138,14 +144,14 @@ export function CampaignEditScreen() {
         </FieldGroup>
         <div>
           <Button onClick={() => navigate("/search/search", { state: { campaign } })}>
-            Add Influencer
+            インフルエンサーを追加
           </Button>
         </div>
         <FieldGroup className="flex-col items-start gap-4">
           <div>
-            <p className="text-sm font-medium text-foreground">Campaign Dates</p>
+            <p className="text-sm font-medium text-foreground">期間</p>
             <p className="text-xs text-muted-foreground">
-              Select the start and end date for this campaign.
+              開始日と終了日を選んでね。
             </p>
           </div>
           <Calendar
@@ -163,7 +169,7 @@ export function CampaignEditScreen() {
           onClick={handleUpdate}
           disabled={submitting}
         >
-          {submitting ? "Updating..." : "Update Campaign"}
+          {submitting ? "更新中..." : "更新する"}
         </Button>
       </FieldSet>
     </div>

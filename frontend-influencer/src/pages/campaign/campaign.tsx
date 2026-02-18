@@ -47,24 +47,28 @@ export function CampaignScreen() {
   }, [user])
 
   return (
-    <div className="w-full min-h-screen px-8 py-6 space-y-4">
-      <div className="flex justify-end">
-        <Button onClick={() => navigate("/campaign/create")}>
-          Create New Campaign
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+        <div className="section-title font-display">キャンペーン一覧</div>
+        <div className="section-subtitle">計画・進行・振り返りをまとめて管理。</div>
+      </div>
+      <Button onClick={() => navigate("/campaign/create")}>
+          新しいキャンペーン
         </Button>
       </div>
 
-      {loading && <p className="text-sm text-muted-foreground">Loading campaigns...</p>}
-      {error && <p className="text-sm text-red-600">Error: {error}</p>}
+      {loading && <p className="text-sm text-muted-foreground">読み込み中...</p>}
+      {error && <p className="text-sm text-red-600">エラー: {error}</p>}
 
       {!loading && campaigns.length === 0 && (
-        <p className="text-sm text-muted-foreground">No campaigns yet.</p>
+        <p className="text-sm text-muted-foreground">キャンペーンがまだないよ。</p>
       )}
 
       {!loading && campaigns.length > 0 && (
-        <div className="space-y-6">
+        <div className="space-y-8">
           <div className="space-y-3">
-            <h2 className="text-lg font-semibold">Ongoing</h2>
+            <h2 className="section-title">進行中</h2>
             <div className="flex flex-wrap items-start gap-4">
               {campaigns
                 .filter((campaign) => campaign.status !== "complete")
@@ -75,9 +79,9 @@ export function CampaignScreen() {
                     onClick={() => navigate("/campaign/detail", { state: { campaign } })}
                   >
                     <CardHeader>
-                      <CardTitle className="text-lg">{campaign.name}</CardTitle>
+                      <CardTitle className="text-lg font-display">{campaign.name}</CardTitle>
                       <p className="text-sm text-muted-foreground">
-                        {campaign.status ?? "draft"}
+                        {campaign.status ?? "下書き"}
                       </p>
                     </CardHeader>
                     <CardContent className="space-y-2">
@@ -85,13 +89,13 @@ export function CampaignScreen() {
                         <p className="text-sm text-foreground">{campaign.description}</p>
                       )}
                       <p className="text-xs text-muted-foreground">
-                        {campaign.start_date ?? "N/A"} – {campaign.end_date ?? "N/A"}
+                        {campaign.start_date ?? "未設定"} – {campaign.end_date ?? "未設定"}
                       </p>
                       {campaign.budget !== null && (
-                        <p className="text-xs text-muted-foreground">Budget: {campaign.budget}</p>
+                        <p className="text-xs text-muted-foreground">予算: {campaign.budget}</p>
                       )}
                       {campaign.goal && (
-                        <p className="text-xs text-muted-foreground">Goal: {campaign.goal}</p>
+                        <p className="text-xs text-muted-foreground">目標: {campaign.goal}</p>
                       )}
                     </CardContent>
                   </Card>
@@ -100,7 +104,7 @@ export function CampaignScreen() {
           </div>
 
           <div className="space-y-3">
-            <h2 className="text-lg font-semibold">Complete</h2>
+            <h2 className="section-title">完了</h2>
             <div className="flex flex-wrap items-start gap-4">
               {campaigns
                 .filter((campaign) => campaign.status === "complete")
@@ -111,9 +115,9 @@ export function CampaignScreen() {
                     onClick={() => navigate("/campaign/detail", { state: { campaign } })}
                   >
                     <CardHeader>
-                      <CardTitle className="text-lg">{campaign.name}</CardTitle>
+                      <CardTitle className="text-lg font-display">{campaign.name}</CardTitle>
                       <p className="text-sm text-muted-foreground">
-                        {campaign.status ?? "draft"}
+                        {campaign.status ?? "下書き"}
                       </p>
                     </CardHeader>
                     <CardContent className="space-y-2">
@@ -121,13 +125,13 @@ export function CampaignScreen() {
                         <p className="text-sm text-foreground">{campaign.description}</p>
                       )}
                       <p className="text-xs text-muted-foreground">
-                        {campaign.start_date ?? "N/A"} – {campaign.end_date ?? "N/A"}
+                        {campaign.start_date ?? "未設定"} – {campaign.end_date ?? "未設定"}
                       </p>
                       {campaign.budget !== null && (
-                        <p className="text-xs text-muted-foreground">Budget: {campaign.budget}</p>
+                        <p className="text-xs text-muted-foreground">予算: {campaign.budget}</p>
                       )}
                       {campaign.goal && (
-                        <p className="text-xs text-muted-foreground">Goal: {campaign.goal}</p>
+                        <p className="text-xs text-muted-foreground">目標: {campaign.goal}</p>
                       )}
                     </CardContent>
                   </Card>
@@ -136,8 +140,6 @@ export function CampaignScreen() {
           </div>
         </div>
       )}
-
-
     </div>
   )
 }

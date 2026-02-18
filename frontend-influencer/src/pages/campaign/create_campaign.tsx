@@ -42,12 +42,12 @@ export function CreateCampaignScreen() {
 
   const handleCreate = async () => {
     if (!user) {
-      setError("You must be signed in to create a campaign.")
+      setError("ログインしてから作成してね。")
       return
     }
 
     if (!dateRange?.from || !dateRange?.to) {
-      setError("Please select a start and end date.")
+      setError("開始日と終了日を選んでね。")
       return
     }
 
@@ -77,16 +77,22 @@ export function CreateCampaignScreen() {
   }
 
   return (
-    <div className="space-y-4">
-      <Button variant="outline" onClick={() => navigate("/campaign")}>
-        Back to Campaigns
-      </Button>
+    <div className="flex flex-col gap-6">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="section-title font-display">キャンペーン作成</div>
+          <div className="section-subtitle">範囲・予算・日程を決めよう。</div>
+        </div>
+        <Button variant="outline" onClick={() => navigate("/campaign")}>
+          一覧に戻る
+        </Button>
+      </div>
       <FieldSet>
-        <FieldLegend>Create Campaign</FieldLegend>
+        <FieldLegend className="font-display text-lg">キャンペーン詳細</FieldLegend>
         <FieldGroup className="flex-row items-start gap-4">
           {/* Campaign Name Field */}
           <Field className="flex-1 min-w-[220px] basis-0 w-auto">
-            <FieldLabel htmlFor="name">Campaign name</FieldLabel>
+            <FieldLabel htmlFor="name">キャンペーン名</FieldLabel>
             <Input
               id="name"
               value={formValues.name}
@@ -95,7 +101,7 @@ export function CreateCampaignScreen() {
           </Field>
           {/* Description Field */}
           <Field className="flex-1 min-w-[220px] basis-0 w-auto">
-            <FieldLabel htmlFor="description">Description</FieldLabel>
+            <FieldLabel htmlFor="description">説明</FieldLabel>
             <Input
               id="description"
               value={formValues.description}
@@ -104,7 +110,7 @@ export function CreateCampaignScreen() {
           </Field>
           {/* Budget Field */}
           <Field className="flex-1 min-w-[220px] basis-0 w-auto">
-            <FieldLabel htmlFor="budget">Budget</FieldLabel>
+            <FieldLabel htmlFor="budget">予算</FieldLabel>
             <Input
               id="budget"
               type="number"
@@ -114,7 +120,7 @@ export function CreateCampaignScreen() {
           </Field>
           {/* Goal Field */}
           <Field className="flex-1 min-w-[220px] basis-0 w-auto">
-            <FieldLabel htmlFor="goal">Goal</FieldLabel>
+            <FieldLabel htmlFor="goal">目標</FieldLabel>
             <Input
               id="goal"
               value={formValues.goal}
@@ -124,14 +130,14 @@ export function CreateCampaignScreen() {
       </FieldGroup>
         <div>
           <Button onClick={() => navigate("/search/search")}>
-            Add Influencer
+            インフルエンサーを追加
           </Button>
         </div>
         <FieldGroup className="flex-col items-start gap-4">
           <div>
-            <p className="text-sm font-medium text-foreground">Campaign Dates</p>
+            <p className="text-sm font-medium text-foreground">期間</p>
             <p className="text-xs text-muted-foreground">
-              Select the start and end date for this campaign.
+              開始日と終了日を選んでね。
             </p>
           </div>
           <Calendar
@@ -149,7 +155,7 @@ export function CreateCampaignScreen() {
           onClick={handleCreate}
           disabled={submitting}
         >
-          {submitting ? "Creating..." : "Create Campaign"}
+          {submitting ? "作成中..." : "作成する"}
         </Button>
       </FieldSet>
     </div>

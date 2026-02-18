@@ -36,13 +36,13 @@ export function LoginPage() {
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle className="text-2xl">ログイン</CardTitle>
-          <CardDescription>Community Dashboardにログイン</CardDescription>
+          <CardDescription>ダッシュボードにログインしよう</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <label htmlFor="email" className="text-sm font-medium">
-                Email
+                メールアドレス
               </label>
               <input
                 id="email"
@@ -51,13 +51,13 @@ export function LoginPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
-                placeholder="email@example.com"
+                placeholder="mail@example.com"
                 disabled={loading}
               />
             </div>
             <div className="space-y-2">
               <label htmlFor="password" className="text-sm font-medium">
-                Password
+                パスワード
               </label>
               <input
                 id="password"
@@ -84,7 +84,7 @@ export function LoginPage() {
               className="w-full bg-white text-primary hover:bg-primary hover:text-white"
               disabled={loading}
             >
-              Register
+              新規登録
             </Button>
           </form>
         </CardContent>

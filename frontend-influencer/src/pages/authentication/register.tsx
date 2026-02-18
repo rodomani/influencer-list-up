@@ -35,13 +35,13 @@ export function RegisterPage() {
     const { email, password, confirmPassword, name, company, role, timezone, language } = formValues
 
     if (!password) {
-      setError("Password is required.")
+      setError("パスワードは必須だよ。")
       setLoading(false)
       return
     }
 
     if (password !== confirmPassword) {
-      setError("Passwords do not match.")
+      setError("パスワードが一致してないよ。")
       setLoading(false)
       return
     }
@@ -63,7 +63,7 @@ export function RegisterPage() {
     navigate(`/verify?email=${encodeURIComponent(email)}`)
 
 
-    setSuccess("Account created. Please verify from the email we sent you.")
+    setSuccess("アカウント作成完了！メールを確認してね。")
     setLoading(false)
   }
 
@@ -71,37 +71,37 @@ export function RegisterPage() {
     <div className="min-h-screen flex items-center justify-center bg-muted/50 px-4">
       <Card className="w-full max-w-xl">
         <CardHeader>
-          <CardTitle className="text-2xl">Register</CardTitle>
-          <CardDescription>Create your account to get started.</CardDescription>
+          <CardTitle className="text-2xl">新規登録</CardTitle>
+          <CardDescription>まずはアカウントを作ろう。</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
+                <Label htmlFor="email">メールアドレス</Label>
                 <Input
                   id="email"
                   type="email"
                   value={formValues.email}
                   onChange={handleChange("email")}
                   required
-                  placeholder="email@example.com"
+                  placeholder="mail@example.com"
                   disabled={loading}
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="name">Name</Label>
+                <Label htmlFor="name">名前</Label>
                 <Input
                   id="name"
                   value={formValues.name}
                   onChange={handleChange("name")}
                   required
-                  placeholder="Jane Doe"
+                  placeholder="山田 花子"
                   disabled={loading}
                 />
               </div>
               <div className="space-y-2 md:col-span-2">
-                <Label htmlFor="password">Password</Label>
+                <Label htmlFor="password">パスワード</Label>
                 <Input
                   id="password"
                   type="password"
@@ -113,7 +113,7 @@ export function RegisterPage() {
                 />
               </div>
               <div className="space-y-2 md:col-span-2">
-                <Label htmlFor="confirmPassword">Confirm Password</Label>
+                <Label htmlFor="confirmPassword">パスワード確認</Label>
                 <Input
                   id="confirmPassword"
                   type="password"
@@ -125,27 +125,27 @@ export function RegisterPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="company">Company</Label>
+                <Label htmlFor="company">会社名</Label>
                 <Input
                   id="company"
                   value={formValues.company}
                   onChange={handleChange("company")}
-                  placeholder="Company Inc."
+                  placeholder="株式会社サンプル"
                   disabled={loading}
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="role">Role</Label>
+                <Label htmlFor="role">役職</Label>
                 <Input
                   id="role"
                   value={formValues.role}
                   onChange={handleChange("role")}
-                  placeholder="Marketing Manager"
+                  placeholder="マーケ担当"
                   disabled={loading}
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="timezone">Timezone</Label>
+                <Label htmlFor="timezone">タイムゾーン</Label>
                 <Input
                   id="timezone"
                   value={formValues.timezone}
@@ -155,12 +155,12 @@ export function RegisterPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="language">Language</Label>
+                <Label htmlFor="language">言語</Label>
                 <Input
                   id="language"
                   value={formValues.language}
                   onChange={handleChange("language")}
-                  placeholder="English"
+                  placeholder="日本語"
                   disabled={loading}
                 />
               </div>
@@ -179,7 +179,7 @@ export function RegisterPage() {
 
             <div className="flex gap-3">
               <Button type="submit" disabled={loading} className="flex-1">
-                {loading ? "Creating..." : "Create account"}
+                {loading ? "作成中..." : "アカウント作成"}
               </Button>
               <Button
                 type="button"
@@ -188,7 +188,7 @@ export function RegisterPage() {
                 onClick={() => navigate("/login")}
                 disabled={loading}
               >
-                Back to login
+                ログインに戻る
               </Button>
             </div>
           </form>

@@ -15,24 +15,24 @@ export function VerificationPage() {
     <div className="min-h-screen flex items-center justify-center bg-muted/50 px-4">
       <Card className="w-full max-w-lg">
         <CardHeader>
-          <CardTitle className="text-2xl">Check your email</CardTitle>
+          <CardTitle className="text-2xl">メールを確認してね</CardTitle>
           <CardDescription>
             {email
-              ? `We sent a verification link to ${email}.`
-              : "We sent a verification link to your email."}
-            {" "}Please click the link to confirm your account.
+              ? `${email} に確認リンクを送ったよ。`
+              : "メールに確認リンクを送ったよ。"}
+            {" "}リンクをクリックして登録を完了してね。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            After verifying, return here and sign in to continue.
+            確認できたら戻ってログインしてね。
           </p>
           <div className="flex gap-3">
             <Button className="flex-1" onClick={() => navigate("/login")}>
-              Go to login
+              ログインへ
             </Button>
             <Button variant="outline" className="flex-1" onClick={() => navigate(-1)}>
-              Back
+              戻る
             </Button>
           </div>
         </CardContent>
