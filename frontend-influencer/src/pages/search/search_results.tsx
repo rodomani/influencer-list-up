@@ -25,6 +25,8 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination"
+import star from "@/assets/star.png"
+import starToggle from "@/assets/star-2.png"
 import { useAuth } from "@/contexts/AuthContext"
 import { supabase } from "@/lib/supabase"
 
@@ -54,6 +56,7 @@ type InfluencerRowFromDB = {
   keywords: string | null // DB is text
   profile_image_url: string | null
   accounts_metrics?: MetricsRow[] | null // embedded returns array
+  bookmarks: string[] | null
 }
 
 type InfluencerNormalized = {
@@ -64,6 +67,7 @@ type InfluencerNormalized = {
   gender: string | null
   keywords: string | null
   accounts_metrics: MetricsRow | null // single latest metric row
+  bookmarks: string[]
 }
 
 export function SearchResultsPage() {
@@ -152,6 +156,7 @@ export function SearchResultsPage() {
           gender,
           keywords,
           profile_image_url,
+          bookmarks,
           accounts_metrics(maximum_likes, posts, followers, metric_date)
         `
         )
@@ -215,6 +220,7 @@ export function SearchResultsPage() {
         keywords: r.keywords,
         profile_image_url: r.profile_image_url,
         accounts_metrics: pickLatest(r.accounts_metrics),
+        bookmarks: r.bookmarks ?? [],
       }))
 
       // Apply ranges client-side (so -1/null doesn't kill everything)
@@ -265,6 +271,34 @@ export function SearchResultsPage() {
     setSavingCampaignId(null)
   }
 
+  const handleToggleBookmark = async (influencer: InfluencerNormalized) => {
+    if (!user) return
+    const alreadyBookmarked = influencer.bookmarks.includes(user.id)
+    const updatedBookmarks = alreadyBookmarked
+      ? influencer.bookmarks.filter((id) => id !== user.id)
+      : [...influencer.bookmarks, user.id]
+
+    setInfluencers((prev) =>
+      prev.map((row) =>
+        row.id === influencer.id ? { ...row, bookmarks: updatedBookmarks } : row
+      )
+    )
+
+    const { error } = await supabase
+      .from("sns_accounts")
+      .update({ bookmarks: updatedBookmarks })
+      .eq("id", influencer.id)
+
+    if (error) {
+      setError(error.message)
+      setInfluencers((prev) =>
+        prev.map((row) =>
+          row.id === influencer.id ? { ...row, bookmarks: influencer.bookmarks } : row
+        )
+      )
+    }
+  }
+
   return (
     <div className="min-h-screen min-w-270 px-4">
       <div className="pb-5 flex justify-end">
@@ -306,14 +340,35 @@ export function SearchResultsPage() {
               <CardHeader>
                 <div className="flex items-start justify-between gap-4">
                   <CardTitle className="pb-2">{influencer.account_name}</CardTitle>
-                  {influencer.profile_image_url ? (
-                    <img
-                      src={influencer.profile_image_url}
-                      alt={`${influencer.account_name} profile`}
-                      className="h-16 w-16 shrink-0 rounded-full object-cover"
-                      loading="lazy"
-                    />
-                  ) : null}
+                  <div className="flex flex-col items-center gap-2">
+                    {influencer.profile_image_url ? (
+                      <img
+                        src={influencer.profile_image_url}
+                        alt={`${influencer.account_name} profile`}
+                        className="h-16 w-16 shrink-0 rounded-full object-cover"
+                        loading="lazy"
+                      />
+                    ) : null}
+                    {user ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="border-0"
+                        aria-pressed={influencer.bookmarks.includes(user.id)}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          handleToggleBookmark(influencer)
+                        }}
+                      >
+                        {influencer.bookmarks.includes(user.id) ? (
+                          <img src={starToggle} alt="favorite" className="h-5 w-5" />
+                        ) : (
+                          <img src={star} alt="favorite" className="h-5 w-5" />
+                        )}
+                      </Button>
+                    ) : null}
+                  </div>
                 </div>
 
                 <div className="flex flex-col gap-4 md:flex-row md:gap-6">
@@ -408,23 +463,38 @@ export function SearchResultsPage() {
                   }}
                 />
               </PaginationItem>
-              {Array.from({ length: totalPages }, (_, index) => {
-                const page = index + 1
-                return (
-                  <PaginationItem key={page}>
-                    <PaginationLink
-                      href="#"
-                      isActive={page === currentPage}
-                      onClick={(event) => {
-                        event.preventDefault()
-                        setCurrentPage(page)
-                      }}
-                    >
-                      {page}
-                    </PaginationLink>
-                  </PaginationItem>
-                )
-              })}
+              {(() => {
+                const MAX_VISIBLE = 15
+                const half = Math.floor(MAX_VISIBLE / 2)
+                let start = Math.max(1, currentPage - half)
+                let end = Math.min(totalPages, currentPage + half)
+
+                const visibleCount = end - start + 1
+                if (visibleCount < MAX_VISIBLE) {
+                  const missing = MAX_VISIBLE - visibleCount
+                  const shiftLeft = Math.min(missing, start - 1)
+                  start -= shiftLeft
+                  end = Math.min(totalPages, end + (missing - shiftLeft))
+                }
+
+                return Array.from({ length: end - start + 1 }, (_, index) => {
+                  const page = start + index
+                  return (
+                    <PaginationItem key={page}>
+                      <PaginationLink
+                        href="#"
+                        isActive={page === currentPage}
+                        onClick={(event) => {
+                          event.preventDefault()
+                          setCurrentPage(page)
+                        }}
+                      >
+                        {page}
+                      </PaginationLink>
+                    </PaginationItem>
+                  )
+                })
+              })()}
               <PaginationItem>
                 <PaginationNext
                   href="#"

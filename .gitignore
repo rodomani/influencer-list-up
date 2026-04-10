@@ -72,3 +72,8 @@ node_modules/
 .venv/
 dist/
 supabase/.temp/
+
+
+__pycache__/
+*.pyc
+lid.176.bin

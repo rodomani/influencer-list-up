@@ -70,26 +70,43 @@ SUPABASE_SERVICE_ROLE_KEY = must_env("SUPABASE_SERVICE_ROLE_KEY")
 PROFILE_IMAGE_BUCKET = os.getenv("PROFILE_IMAGE_BUCKET", "profile_images").strip() or "profile_images"
 
 KEYWORD_POOL = [
-    "グルメ",
-    "コスメ",
-    # write more keywords here
+"コスメ",
+"スキンケア",
+"メイク",
+"美容",
+"グルメ",
+"カフェ",
+"レシピ",
+"ファッション",
+"コーデ",
+"ルーティン",
+"Vlog",
+"旅行",
+"ダイエット",
+"筋トレ",
+"ヘアケア",
+"ネイル",
+"育児",
+"ガジェット",
+"収納",
+"ライフスタイル"
 ]
-KEYWORDS_PER_RUN = env_int("KEYWORDS_PER_RUN", 5)
+KEYWORDS_PER_RUN = env_int("KEYWORDS_PER_RUN", 15)
 CYCLE_STATE_PATH = os.path.join(os.path.dirname(__file__), ".keyword_cycle.json")
 
 JP_STRICT = env_bool("JP_STRICT", True)
 
 # Apify call sizes
-SEARCH_LIMIT = env_int("SEARCH_LIMIT", 50)
-POSTS_LIMIT = env_int("POSTS_LIMIT", 50)
+SEARCH_LIMIT = env_int("SEARCH_LIMIT", 30)
+POSTS_LIMIT = env_int("POSTS_LIMIT", 20)
 
 # Discovery scheduling / gating
-MIN_DB_CANDIDATES_PER_KEYWORD = env_int("MIN_DB_CANDIDATES_PER_KEYWORD", 50)
-DISCOVERY_STALE_DAYS = env_int("DISCOVERY_STALE_DAYS", 7)
+MIN_DB_CANDIDATES_PER_KEYWORD = env_int("MIN_DB_CANDIDATES_PER_KEYWORD", 80)
+DISCOVERY_STALE_DAYS = env_int("DISCOVERY_STALE_DAYS", 14)
 MAX_DB_CANDIDATES_FETCH = env_int("MAX_DB_CANDIDATES_FETCH", 300)
 
 # Posts scraping scheduling
-POSTS_REFRESH_HOURS = env_int("POSTS_REFRESH_HOURS", 12)
+POSTS_REFRESH_HOURS = env_int("POSTS_REFRESH_HOURS", 6)
 
 # Trending thresholds
 HIGH_FOLLOWERS_THRESHOLD = env_int("HIGH_FOLLOWERS_THRESHOLD", 100_000)
@@ -110,12 +127,12 @@ COMPANY_BIO_KEYWORDS = {
     "pr", "sales", "shipping", "worldwide shipping", "order", "orders", "buy",
     "discount", "promo", "promotion", "wholesale", "stockist",
     "headquarters", "hq", "contact us", "email us", "business inquiries",
-    "corp", "corporation", "company", "inc", "ltd", "llc", "co.", "gmbh", "plc", "news"
+    "corp", "corporation", "company", "inc", "ltd", "llc", "co.", "gmbh", "plc", "news", "staff"
 }
 
 COMPANY_NAME_TOKENS = {
     "inc", "ltd", "llc", "corp", "co", "company", "group", "official", "shop", "store",
-    "studio", "agency", "brand", "boutique", "restaurant", "hotel", "clinic", "news"
+    "studio", "agency", "brand", "boutique", "restaurant", "hotel", "clinic", "news", "staff"
 }
 
 PERSON_HINT_KEYWORDS = {
@@ -134,8 +151,12 @@ def looks_like_company(profile: Dict[str, Any]) -> bool:
     full_name = norm_text(profile.get("full_name"))
     bio = norm_text(profile.get("biography"))
 
+    def _tokenize(s: str) -> List[str]:
+        return [p for p in re.split(r"[^a-z0-9]+", s) if p]
+
+    name_tokens = set(_tokenize(full_name)) | set(_tokenize(username))
     for tok in COMPANY_NAME_TOKENS:
-        if f" {tok} " in f" {full_name} " or f" {tok} " in f" {username} ":
+        if tok in name_tokens:
             return True
 
     for kw in COMPANY_BIO_KEYWORDS:
@@ -248,17 +269,27 @@ def sb_upsert(table: str, rows: List[Dict[str, Any]], on_conflict: Optional[str]
     if select:
         params["select"] = select
 
-    r = requests.post(
-        url,
-        params=params,
-        headers=sb_headers("resolution=merge-duplicates, return=representation"),
-        data=json.dumps(rows),
-        timeout=60,
-    )
-    if not r.ok:
+    max_attempts = 4
+    for attempt in range(1, max_attempts + 1):
+        r = requests.post(
+            url,
+            params=params,
+            headers=sb_headers("resolution=merge-duplicates, return=representation"),
+            data=json.dumps(rows),
+            timeout=60,
+        )
+        if r.ok:
+            out = r.json()
+            return out if isinstance(out, list) else []
+
+        # Retry on transient gateway/edge errors
+        if r.status_code in (502, 503, 504) and attempt < max_attempts:
+            wait_s = 2 * attempt
+            print(f"Supabase upsert {table} got {r.status_code}. Retrying in {wait_s}s...")
+            time.sleep(wait_s)
+            continue
+
         raise RuntimeError(f"Supabase upsert error {r.status_code}: {r.text[:800]}")
-    out = r.json()
-    return out if isinstance(out, list) else []
 
 
 def sb_patch(table: str, where_params: Dict[str, str], fields: Dict[str, Any]) -> None:
@@ -344,7 +375,10 @@ def parse_profile(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     followers = int(first(it, "followersCount", "followers") or 0)
     following = int(first(it, "followsCount", "following") or 0)
-    posts_count = int(first(it, "postsCount", "posts") or 0)
+    meta = it.get("metaData") or {}
+    if not isinstance(meta, dict):
+        meta = {}
+    posts_count = int(first(meta, "postsCount", "posts") or 0)
 
     return {
         "platform_user_id": str(platform_user_id),
@@ -358,6 +392,7 @@ def parse_profile(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "followers": followers,
         "following": following,
         "posts_count": posts_count,
+        "maximum_likes": first(it, "likesCount", "likes"),
         "account_url": f"https://www.instagram.com/{username}/",
     }
 
@@ -389,7 +424,7 @@ def parse_post(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "caption": caption,
         "posted_at": posted_at,
         "media_type": first(it, "type", "mediaType"),
-        "likes": first(it, "likesCount", "likes"),
+        "maximum_likes": first(it, "likesCount", "likes"),
         "comments": first(it, "commentsCount", "comments"),
         "views": first(it, "videoViewCount", "views", "playCount"),
     }
@@ -539,8 +574,7 @@ def upsert_account_from_profile(profile: Dict[str, Any], keyword: str) -> Option
         "business_account": profile.get("is_business"),
         "country": "JP",
         "language": "ja",
-        "keyword": keyword,
-        "keywords": merged,
+        "keywords": keyword,
         "last_profile_scraped_at": utcnow_iso(),
     }]
 
@@ -557,6 +591,7 @@ def upsert_account_metrics(account_id: int, profile: Dict[str, Any]) -> None:
         "followers": int(profile.get("followers") or 0),
         "following": int(profile.get("following") or 0),
         "posts": int(profile.get("posts_count") or 0),
+        "maximum_likes": profile.get("maximum_likes"),
     }]
     sb_upsert("accounts_metrics", rows, on_conflict="account_id,metric_date", select="id")
 
@@ -659,18 +694,27 @@ def ingest_posts_and_metrics(account_id: int, posts: List[Dict[str, Any]]) -> No
     upserted = sb_upsert("posts", post_rows, on_conflict="external_post_id", select="id,external_post_id,caption")
     post_id_by_ext = {r["external_post_id"]: int(r["id"]) for r in upserted}
 
+    captured_at = utcnow_iso()
     metric_rows: List[Dict[str, Any]] = []
     for p in posts:
         post_id = post_id_by_ext.get(p["external_post_id"])
         if not post_id:
             continue
 
+        views = int(p.get("views") or 0)
+        likes = int(p.get("likes") or 0)
+        comments_count = int(p.get("comments") or 0)
+
         metric_rows.append({
             "post_id": post_id,
-            "likes": p.get("likes"),
-            "comments": p.get("comments"),
-            "views": p.get("views"),
-            "created_at": utcnow_iso(),
+            "views": views,
+            "likes": likes,
+            "comments_count": comments_count,
+            "duration_seconds": None,
+            "like_view_rate": (likes / views) if views > 0 else 0.0,
+            "comment_view_rate": (comments_count / views) if views > 0 else 0.0,
+            "captured_at": captured_at,
+            "created_at": captured_at,
         })
 
         caption = p.get("caption") or ""
@@ -679,7 +723,7 @@ def ingest_posts_and_metrics(account_id: int, posts: List[Dict[str, Any]]) -> No
             upsert_hashtags_and_join(post_id, tags)
 
     if metric_rows:
-        sb_upsert("post_metrics", metric_rows, on_conflict=None, select="id")
+        sb_upsert("post_metrics_snapshots", metric_rows, on_conflict=None, select="id")
 
 
 def upsert_hashtags_and_join(post_id: int, tags: Set[str]) -> None:
@@ -732,7 +776,6 @@ def main() -> None:
             print(f"Apify discovered profiles: {len(profiles)}")
 
             for prof in profiles:
-                # ✅ CHANGED: account_id can be None now
                 account_id = upsert_account_from_profile(prof, kw)
                 if not account_id:
                     continue

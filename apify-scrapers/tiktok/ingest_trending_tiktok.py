@@ -4,7 +4,7 @@ import json
 import random
 import time
 import requests
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, Set
 
 from dotenv import load_dotenv
@@ -39,11 +39,28 @@ def env_str(k: str, default: str) -> str:
     v = os.getenv(k)
     return v.strip() if v and v.strip() else default
 
+def env_json(k: str, default: Dict[str, Any]) -> Dict[str, Any]:
+    raw = os.getenv(k)
+    if not raw or not raw.strip():
+        return default
+    try:
+        return json.loads(raw)
+    except Exception as exc:
+        raise RuntimeError(f"Invalid JSON in env var {k}: {exc}")
+
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 def today_iso() -> str:
     return date.today().isoformat()
+
+def iso_to_dt(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 def norm_text(s: Optional[str]) -> str:
     return (s or "").strip().lower()
@@ -77,58 +94,106 @@ def to_int(v: Any) -> Optional[int]:
 # -----------------------
 # Config
 # -----------------------
+MODE = env_str("MODE", "discovery").lower()  # discovery | monitoring
+
 APIFY_TOKEN = must_env("APIFY_TOKEN")
+
+APIFY_TIKTOK_SEARCH_ACTOR = env_str("APIFY_TIKTOK_SEARCH_ACTOR", "clockworks~tiktok-scraper")
+APIFY_TIKTOK_PROFILE_ACTOR = env_str("APIFY_TIKTOK_PROFILE_ACTOR", "clockworks~tiktok-scraper")
+
 SUPABASE_URL = must_env("SUPABASE_URL").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = must_env("SUPABASE_SERVICE_ROLE_KEY")
-PROFILE_IMAGE_BUCKET = os.getenv("PROFILE_IMAGE_BUCKET", "profile_images").strip() or "profile_images"
+PROFILE_IMAGE_BUCKET = env_str("PROFILE_IMAGE_BUCKET", "profile_images") or "profile_images"
 
-DEFAULT_PROFILE_IMAGE_URL = os.getenv(
-    "DEFAULT_PROFILE_IMAGE_URL",
-    "https://www.tiktok.com/favicon.ico",
-)
+DEFAULT_PROFILE_IMAGE_URL = env_str("DEFAULT_PROFILE_IMAGE_URL", "https://www.tiktok.com/favicon.ico")
 
-# TikTok keywords
 TIKTOK_KEYWORD_POOL = [
-    "グルメ",
-    "コスメ",
+  'コスメ',
+'メイク',
+'スキンケア',
+'グルメ',
+'カフェ',
+'コンビニ',
+'ファッション',
+'コーデ',
+'ルーティン',
+'ダイエット',
+'筋トレ',
+'ヘアアレンジ',
+'ネイル',
+'推し活',
+'開封',
+'レビュー',
+'旅行',
+'Vlog',
+'収納',
+'美容'
 ]
+TIKTOK_KEYWORDS_PER_RUN = env_int("TIKTOK_KEYWORDS_PER_RUN", 15)  
+TIKTOK_MAX_ITEMS = env_int("TIKTOK_MAX_ITEMS", 60)           
 
-TIKTOK_KEYWORDS_PER_RUN = env_int("TIKTOK_KEYWORDS_PER_RUN", 5)
-TIKTOK_MAX_ITEMS = env_int("TIKTOK_MAX_ITEMS", 120)
-
-# Keep for metadata/logging, but NOT sent to actor (schema mismatch)
-TIKTOK_SORT = env_str("TIKTOK_SORT", "relevance")
 TIKTOK_LANGUAGE = env_str("TIKTOK_LANGUAGE", "ja")
-
-# Proxy (recommended)
 TIKTOK_PROXY_COUNTRY = env_str("TIKTOK_PROXY_COUNTRY", "JP")
 
-# ✅ NEW: Minimum follower gate (only save accounts >= 10,000)
-MIN_FOLLOWERS = env_int("MIN_FOLLOWERS", 10_000)
+CYCLE_STATE_PATH = os.path.join(os.path.dirname(__file__), ".keyword_cycle_tiktok.json")
 
+# Influencer filter gates
+MIN_FOLLOWERS = env_int("MIN_FOLLOWERS", 10_000)
 JP_STRICT = env_bool("JP_STRICT", True)
 INFLUENCER_STRICT = env_bool("INFLUENCER_STRICT", False)
 
-# Trending thresholds
+# Trending thresholds (DB-only)
 HIGH_FOLLOWERS_THRESHOLD = env_int("HIGH_FOLLOWERS_THRESHOLD", 100_000)
 MIN_DAILY_GROWTH_PCT = env_float("MIN_DAILY_GROWTH_PCT", 0.5)
 MIN_DAILY_GROWTH_ABS = env_int("MIN_DAILY_GROWTH_ABS", 500)
 TREND_DAYS = env_int("TREND_DAYS", 3)
 
-CYCLE_STATE_PATH = os.path.join(os.path.dirname(__file__), ".keyword_cycle_tiktok.json")
+# Monitoring knobs (posts)
+TIKTOK_MAX_INFLUENCERS_PER_RUN = env_int("TIKTOK_MAX_INFLUENCERS_PER_RUN", 40)
+TIKTOK_POSTS_PER_INFLUENCER = env_int("TIKTOK_POSTS_PER_INFLUENCER", 12)
+TIKTOK_POSTS_REFRESH_HOURS = env_int("TIKTOK_POSTS_REFRESH_HOURS", 6)
 
-# Influencer-only filter
+# Discovery knobs (DB gating)
+# If you don't have these columns/behaviors, keep them conservative.
+DISCOVERY_STALE_DAYS = env_int("DISCOVERY_STALE_DAYS", 14)
+MAX_DB_CANDIDATES_FETCH = env_int("MAX_DB_CANDIDATES_FETCH", 300)
+MIN_DB_CANDIDATES_PER_KEYWORD = env_int("MIN_DB_CANDIDATES_PER_KEYWORD", 80)
+
+# Example SEARCH template is already aligned with your current code.
+APIFY_TIKTOK_SEARCH_PAYLOAD_TEMPLATE = env_json(
+    "APIFY_TIKTOK_SEARCH_PAYLOAD_TEMPLATE",
+    {
+        "searchQueries": ["{keyword}"],
+        "searchSection": "/video",
+        "resultsPerPage": "{maxItems}",
+        "proxyCountry": "{proxyCountry}",
+    },
+)
+
+APIFY_TIKTOK_PROFILE_PAYLOAD_TEMPLATE = env_json(
+    "APIFY_TIKTOK_PROFILE_PAYLOAD_TEMPLATE",
+    {
+        # Replace these keys with what your actor expects:
+        "usernames": ["{username}"],
+        "resultsPerPage": "{maxItems}",
+        "proxyCountry": "{proxyCountry}",
+    },
+)
+
+# -----------------------
+# Influencer heuristics
+# -----------------------
 COMPANY_BIO_KEYWORDS = {
     "official", "brand", "shop", "store", "customer service", "support", "press",
     "pr", "sales", "shipping", "worldwide shipping", "order", "orders", "buy",
     "discount", "promo", "promotion", "wholesale", "stockist",
     "headquarters", "hq", "contact us", "email us", "business inquiries",
-    "corp", "corporation", "company", "inc", "ltd", "llc", "co.", "gmbh", "plc", "news"
+    "corp", "corporation", "company", "inc", "ltd", "llc", "co.", "gmbh", "plc", "news", "staff"
 }
 
 COMPANY_NAME_TOKENS = {
     "inc", "ltd", "llc", "corp", "co", "company", "group", "official", "shop", "store",
-    "studio", "agency", "brand", "boutique", "restaurant", "hotel", "clinic", "news"
+    "studio", "agency", "brand", "boutique", "restaurant", "hotel", "clinic", "news", "staff"
 }
 
 PERSON_HINT_KEYWORDS = {
@@ -143,14 +208,18 @@ JP_CHAR_RE = re.compile(r"[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]")
 def _profile_text(profile: Dict[str, Any]) -> Tuple[str, str, str]:
     username = norm_text(profile.get("account_name") or profile.get("username"))
     full_name = norm_text(profile.get("display_name") or profile.get("full_name") or profile.get("name"))
-    bio = norm_text(profile.get("caption") or profile.get("biography") or profile.get("bio"))
+    bio = norm_text(profile.get("caption") or profile.get("biography") or profile.get("bio") or profile.get("signature"))
     return username, full_name, bio
 
 def looks_like_company(profile: Dict[str, Any]) -> bool:
     username, full_name, bio = _profile_text(profile)
 
+    def _tokenize(s: str) -> List[str]:
+        return [p for p in re.split(r"[^a-z0-9]+", s) if p]
+
+    name_tokens = set(_tokenize(full_name)) | set(_tokenize(username))
     for tok in COMPANY_NAME_TOKENS:
-        if f" {tok} " in f" {full_name} " or f" {tok} " in f" {username} ":
+        if tok in name_tokens:
             return True
 
     for kw in COMPANY_BIO_KEYWORDS:
@@ -181,19 +250,14 @@ def is_japanese_influencer(profile: Dict[str, Any]) -> bool:
 def influencer_filter(profile: Dict[str, Any]) -> bool:
     if JP_STRICT and not is_japanese_influencer(profile):
         return False
-
     if int(profile.get("followers") or 0) < MIN_FOLLOWERS:
         return False
-
     if INFLUENCER_STRICT and bool(profile.get("is_business")):
         return False
-
     if looks_like_company(profile):
         return False
-
     if not looks_like_person(profile):
         return False
-
     return True
 
 # -----------------------
@@ -248,16 +312,17 @@ def sb_upsert(table: str, rows: List[Dict[str, Any]], on_conflict: Optional[str]
     out = r.json()
     return out if isinstance(out, list) else []
 
-def supabase_table_columns(table: str) -> Set[str]:
-    try:
-        rows = sb_get(table, {"select": "*", "limit": "1"})
-        if rows:
-            return set(rows[0].keys())
-    except Exception:
-        pass
-    return {"post_id", "likes", "comments", "views", "created_at"}
-
-POST_METRICS_COLUMNS = supabase_table_columns("post_metrics")
+def sb_patch(table: str, where_params: Dict[str, str], fields: Dict[str, Any]) -> None:
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    r = requests.patch(
+        url,
+        params=where_params,
+        headers=sb_headers("return=minimal"),
+        data=json.dumps(fields),
+        timeout=60,
+    )
+    if not r.ok:
+        raise RuntimeError(f"Supabase PATCH error {r.status_code}: {r.text[:800]}")
 
 # -----------------------
 # Storage (profile images)
@@ -359,50 +424,40 @@ def pick_keywords_for_run(pool: List[str], count: int) -> List[str]:
     return selected
 
 # -----------------------
-# Apify: clockworks/tiktok-scraper (run->poll->fetch + logs)
+# Apify runner (generic)
 # -----------------------
-def apify_run_tiktok(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
-    run_url = "https://api.apify.com/v2/acts/clockworks~tiktok-scraper/runs"
-    r = requests.post(run_url, params={"token": APIFY_TOKEN}, json=payload, timeout=60)
+def apify_run_actor_sync_get_items(actor_id: str, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Uses run-sync-get-dataset-items endpoint for simplicity.
+    If your actor doesn't support it well, switch to run->poll like your current code.
+    """
+    url = f"https://api.apify.com/v2/acts/{actor_id}/run-sync-get-dataset-items"
+    r = requests.post(url, params={"token": APIFY_TOKEN, "clean": "true"}, json=payload, timeout=300)
     if not r.ok:
-        raise RuntimeError(f"Apify run start error {r.status_code}: {r.text[:800]}")
+        raise RuntimeError(f"Apify error {r.status_code}: {r.text[:1200]}")
+    data = r.json()
+    return data if isinstance(data, list) else []
 
-    run = r.json().get("data") or {}
-    run_id = run.get("id")
-    if not run_id:
-        raise RuntimeError(f"Apify run start returned no run id: {r.text[:800]}")
-
-    status_url = f"https://api.apify.com/v2/actor-runs/{run_id}"
-    for _ in range(120):  # 10 minutes max
-        s = requests.get(status_url, params={"token": APIFY_TOKEN}, timeout=30)
-        s.raise_for_status()
-        data = s.json().get("data") or {}
-        status = data.get("status")
-
-        if status in ("SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"):
-            if status != "SUCCEEDED":
-                log_url = f"https://api.apify.com/v2/actor-runs/{run_id}/log"
-                log = requests.get(log_url, params={"token": APIFY_TOKEN}, timeout=30)
-                raise RuntimeError(
-                    f"Apify run {status} (runId={run_id}). Log tail:\n{log.text[-4000:]}"
-                )
-
-            dataset_id = data.get("defaultDatasetId")
-            if not dataset_id:
-                raise RuntimeError(f"Apify run SUCCEEDED but no dataset id (runId={run_id}).")
-
-            items_url = f"https://api.apify.com/v2/datasets/{dataset_id}/items"
-            items = requests.get(items_url, params={"token": APIFY_TOKEN, "clean": "true"}, timeout=60)
-            items.raise_for_status()
-            out = items.json()
-            return out if isinstance(out, list) else []
-
-        time.sleep(5)
-
-    raise RuntimeError(f"Apify run did not finish in time (runId={run_id}).")
+def substitute_template(obj: Any, subs: Dict[str, str]) -> Any:
+    """
+    Recursively replaces "{placeholder}" strings inside dict/list/str.
+    """
+    if isinstance(obj, dict):
+        return {k: substitute_template(v, subs) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [substitute_template(x, subs) for x in obj]
+    if isinstance(obj, str):
+        out = obj
+        for k, v in subs.items():
+            out = out.replace("{" + k + "}", v)
+        # allow numeric fields stored as strings in template
+        if out.isdigit():
+            return int(out)
+        return out
+    return obj
 
 # -----------------------
-# Parsing
+# Parsing (authors + posts)
 # -----------------------
 def parse_author_from_item(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     author = it.get("authorMeta") or it.get("author") or it.get("authorInfo") or {}
@@ -420,14 +475,16 @@ def parse_author_from_item(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     username = str(username).lstrip("@")
 
-    followers = to_int(first(author, "fans", "followers", "followerCount", "fansCount"))
-    following = to_int(first(author, "following", "followingCount"))
+    followers = to_int(first(author, "fans", "followers", "followerCount", "fansCount")) or 0
+    following = to_int(first(author, "following", "followingCount")) or 0
     bio = first(author, "signature", "bio", "description")
+    posts = to_int(first(author, "video", "videos"))
 
     avatar = first(author, "avatar", "avatarThumb", "avatarMedium", "avatarLarger", "profileImageUrl")
     profile_image_url = str(avatar).strip() if avatar else DEFAULT_PROFILE_IMAGE_URL
 
     verified = first(author, "verified", "isVerified")
+    max_likes = to_int(first(author, "heart", "heartCount", "digg", "diggCount", "likes", "likeCount"))
 
     return {
         "account_name": username,
@@ -435,8 +492,10 @@ def parse_author_from_item(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "caption": bio,
         "profile_image_url": profile_image_url,
         "is_verified": bool(verified) if verified is not None else None,
-        "followers": int(followers or 0),
-        "following": int(following or 0),
+        "followers": int(followers),
+        "following": int(following),
+        "maximum_likes": max_likes,
+        "posts": posts,
     }
 
 def parse_post_from_item(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -543,9 +602,6 @@ def merge_keywords(existing: Optional[str], new_kw: str) -> str:
     return ", ".join(parts)
 
 def ensure_minimal_account_row(platform: str, account_name: str, account_url: str, followers: int) -> Optional[int]:
-    """
-    ✅ CHANGED: If followers < MIN_FOLLOWERS, do NOT save this account at all.
-    """
     if followers < MIN_FOLLOWERS:
         return None
 
@@ -556,13 +612,15 @@ def ensure_minimal_account_row(platform: str, account_name: str, account_url: st
             "account_name": account_name,
             "account_url": account_url,
             "profile_image_url": DEFAULT_PROFILE_IMAGE_URL,
+            "language": TIKTOK_LANGUAGE,
+            "country": "JP",
         }],
         on_conflict="platform,account_name",
         select="id",
     )
     return int(resp[0]["id"])
 
-def upsert_accounts_metrics(account_id: int, followers: int, following: int) -> None:
+def upsert_accounts_metrics(account_id: int, followers: int, following: int, maximum_likes: Optional[int], posts: Optional[int]) -> None:
     sb_upsert(
         "accounts_metrics",
         [{
@@ -570,16 +628,18 @@ def upsert_accounts_metrics(account_id: int, followers: int, following: int) -> 
             "metric_date": today_iso(),
             "followers": followers,
             "following": following,
+            "maximum_likes": maximum_likes,
+            "posts": posts,
             "created_at": utcnow_iso(),
         }],
         on_conflict="account_id,metric_date",
         select="id",
     )
 
-def upsert_full_sns_account_tiktok(account_id: int, author: Dict[str, Any], keyword: str) -> None:
+def upsert_full_sns_account_tiktok(account_id: int, author: Dict[str, Any], keyword: Optional[str]) -> None:
     existing = sb_get("sns_accounts", {"select": "id,keywords", "id": f"eq.{account_id}", "limit": "1"})
     existing_keywords = existing[0].get("keywords") if existing else None
-    merged = merge_keywords(existing_keywords, keyword)
+    merged = merge_keywords(existing_keywords, keyword) if keyword else (existing_keywords or "")
 
     stored_image_url = upload_profile_image(
         author.get("profile_image_url"),
@@ -596,15 +656,14 @@ def upsert_full_sns_account_tiktok(account_id: int, author: Dict[str, Any], keyw
         "account_name": author.get("account_name"),
         "is_verified": author.get("is_verified"),
         "profile_image_url": stored_image_url or author.get("profile_image_url") or DEFAULT_PROFILE_IMAGE_URL,
-        "business_account": None,
-        "does_livestream": None,
-        "keywords": merged,
+        "keywords": merged if merged else None,
+        "last_profile_scraped_at": utcnow_iso(),
     }
 
     sb_upsert("sns_accounts", [row], on_conflict="id", select="id")
 
-def upsert_posts_and_metrics(account_id: int, posts_raw: List[Dict[str, Any]]) -> None:
-    parsed = [p for p in (parse_post_from_item(x) for x in posts_raw) if p]
+def upsert_posts_and_metrics(account_id: int, items: List[Dict[str, Any]]) -> None:
+    parsed = [p for p in (parse_post_from_item(x) for x in items) if p]
     if not parsed:
         return
 
@@ -616,116 +675,221 @@ def upsert_posts_and_metrics(account_id: int, posts_raw: List[Dict[str, Any]]) -
         "link": p.get("link"),
         "posted_at": p.get("posted_at"),
         "scraped_at": p.get("scraped_at"),
-        "campaign_id": None,
-        "collaboration_id": None,
         "external_post_id": p["external_post_id"],
     } for p in parsed]
 
-    upserted_posts = sb_upsert(
-        "posts",
-        post_rows,
-        on_conflict="external_post_id",
-        select="id,external_post_id",
-    )
+    upserted_posts = sb_upsert("posts", post_rows, on_conflict="external_post_id", select="id,external_post_id")
     post_id_by_ext = {r["external_post_id"]: int(r["id"]) for r in upserted_posts}
 
+    captured_at = utcnow_iso()
     metric_rows: List[Dict[str, Any]] = []
     for p in parsed:
         post_id = post_id_by_ext.get(p["external_post_id"])
         if not post_id:
             continue
 
-        row: Dict[str, Any] = {"post_id": post_id, "created_at": utcnow_iso()}
-
         m = p["metrics"]
-        if "likes" in POST_METRICS_COLUMNS:
-            row["likes"] = m.get("likes")
-        if "comments" in POST_METRICS_COLUMNS:
-            row["comments"] = m.get("comments")
-        if "views" in POST_METRICS_COLUMNS:
-            row["views"] = m.get("views")
-        if "shares" in POST_METRICS_COLUMNS:
-            row["shares"] = m.get("shares")
-
-        metric_rows.append(row)
+        views = int(m.get("views") or 0)
+        likes = int(m.get("likes") or 0)
+        comments_count = int(m.get("comments") or 0)
+        metric_rows.append({
+            "post_id": post_id,
+            "views": views,
+            "likes": likes,
+            "comments_count": comments_count,
+            "duration_seconds": None,
+            "like_view_rate": (likes / views) if views > 0 else 0.0,
+            "comment_view_rate": (comments_count / views) if views > 0 else 0.0,
+            "captured_at": captured_at,
+            "created_at": captured_at,
+        })
 
     if metric_rows:
-        sb_upsert("post_metrics", metric_rows, on_conflict=None, select="id")
+        sb_upsert("post_metrics_snapshots", metric_rows, on_conflict=None, select="id")
+
+def mark_posts_scraped(account_id: int) -> None:
+    sb_patch(
+        "sns_accounts",
+        where_params={"id": f"eq.{account_id}"},
+        fields={"last_posts_scraped_at": utcnow_iso()},
+    )
+
+def should_scrape_posts_now(row: Dict[str, Any]) -> bool:
+    last = iso_to_dt(row.get("last_posts_scraped_at"))
+    if not last:
+        return True
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=TIKTOK_POSTS_REFRESH_HOURS)
+    return last < cutoff
 
 # -----------------------
-# Main
+# DB queries for modes
 # -----------------------
-def main() -> None:
+def db_candidates_for_keyword(keyword: str) -> List[Dict[str, Any]]:
+    # If you store keywords in sns_accounts.keywords as comma-separated strings:
+    return sb_get("sns_accounts", {
+        "select": "id,platform,account_name,account_url,keywords,last_profile_scraped_at,last_posts_scraped_at",
+        "platform": "eq.tiktok",
+        "keywords": f"ilike.*{keyword}*",
+        "limit": str(MAX_DB_CANDIDATES_FETCH),
+        "order": "id.desc",
+    })
+
+def keyword_pool_is_stale(rows: List[Dict[str, Any]]) -> bool:
+    if not rows:
+        return True
+    cutoff = datetime.now(timezone.utc) - timedelta(days=DISCOVERY_STALE_DAYS)
+    for r in rows:
+        dt = iso_to_dt(r.get("last_profile_scraped_at"))
+        if dt and dt >= cutoff:
+            return False
+    return True
+
+def db_tiktok_accounts_for_monitoring(limit: int) -> List[Dict[str, Any]]:
+    # Pull candidate accounts. You can tighten this later (e.g., only those with enough metrics points).
+    return sb_get("sns_accounts", {
+        "select": "id,platform,account_name,account_url,last_posts_scraped_at",
+        "platform": "eq.tiktok",
+        "limit": str(limit),
+        "order": "id.desc",
+    })
+
+# -----------------------
+# Payload builders
+# -----------------------
+def build_search_payload(keyword: str) -> Dict[str, Any]:
+    subs = {
+        "keyword": keyword,
+        "maxItems": str(TIKTOK_MAX_ITEMS),
+        "proxyCountry": str(TIKTOK_PROXY_COUNTRY),
+    }
+    return substitute_template(APIFY_TIKTOK_SEARCH_PAYLOAD_TEMPLATE, subs)
+
+def build_profile_payload(username: str) -> Dict[str, Any]:
+    subs = {
+        "username": username.lstrip("@"),
+        "maxItems": str(TIKTOK_POSTS_PER_INFLUENCER),
+        "proxyCountry": str(TIKTOK_PROXY_COUNTRY),
+    }
+    return substitute_template(APIFY_TIKTOK_PROFILE_PAYLOAD_TEMPLATE, subs)
+
+# -----------------------
+# Modes
+# -----------------------
+def run_discovery() -> None:
     keywords = pick_keywords_for_run(TIKTOK_KEYWORD_POOL, TIKTOK_KEYWORDS_PER_RUN)
-    print("TIKTOK KEYWORDS:", keywords)
-    print("Settings:", {
-        "maxItems": TIKTOK_MAX_ITEMS,
-        "proxyCountry": TIKTOK_PROXY_COUNTRY,
+    print("MODE=discovery | keywords:", keywords)
+    print("Discovery settings:", {
+        "keywordsPerRun": TIKTOK_KEYWORDS_PER_RUN,
+        "maxItemsPerKeyword": TIKTOK_MAX_ITEMS,
         "minFollowers": MIN_FOLLOWERS,
-        "note": "sort/language not sent to actor; kept for DB metadata",
+        "staleDays": DISCOVERY_STALE_DAYS,
+        "minDbCandidatesPerKeyword": MIN_DB_CANDIDATES_PER_KEYWORD,
+        "searchActor": APIFY_TIKTOK_SEARCH_ACTOR,
     })
 
     for kw in keywords:
         print(f"\n=== keyword: {kw} ===")
 
-        # ✅ CHANGED: payload uses the actor's real schema fields
-        payload = {
-            "searchQueries": [kw],
-            "searchSection": "/video",
-            "resultsPerPage": min(100, TIKTOK_MAX_ITEMS),
-            "proxyCountry": TIKTOK_PROXY_COUNTRY,
-        }
+        candidates = db_candidates_for_keyword(kw)
+        need_discovery = (len(candidates) < MIN_DB_CANDIDATES_PER_KEYWORD) or keyword_pool_is_stale(candidates)
+        print("DB candidates:", len(candidates), "| need_discovery:", need_discovery)
+        if not need_discovery:
+            continue
 
-        items = apify_run_tiktok(payload)
-        print("Items returned:", len(items))
+        payload = build_search_payload(kw)
+        items = apify_run_actor_sync_get_items(APIFY_TIKTOK_SEARCH_ACTOR, payload)
+        print("Apify items returned:", len(items))
 
+        # collect unique authors passing filters
         authors: Dict[str, Dict[str, Any]] = {}
-        posts_by_author: Dict[str, List[Dict[str, Any]]] = {}
-
         for it in items:
             a = parse_author_from_item(it)
-            p = parse_post_from_item(it)
-            if not a or not p:
+            if not a:
                 continue
-
-            # ✅ NEW: early follower gate (avoid any DB work)
             if int(a.get("followers") or 0) < MIN_FOLLOWERS:
                 continue
             if not influencer_filter(a):
                 continue
-
             uname = a["account_name"]
             authors[uname] = a
-            posts_by_author.setdefault(uname, []).append(it)
 
-        author_id_map: Dict[str, int] = {}
+        print("Authors kept after filter:", len(authors))
 
-        # Phase 1: write metrics for everyone passing MIN_FOLLOWERS
+        # write minimal account + metrics for today
         for uname, a in authors.items():
             account_id = ensure_minimal_account_row("tiktok", uname, a["account_url"], int(a.get("followers") or 0))
             if not account_id:
                 continue
 
-            author_id_map[uname] = account_id
-            upsert_accounts_metrics(account_id, a["followers"], a["following"])
-
-        # Phase 2: trending-only persistence (posts + fuller metadata)
-        trending_count = 0
-        for uname, account_id in author_id_map.items():
-            if not is_trending_db_only(account_id):
-                continue
-
-            trending_count += 1
-            a = authors[uname]
-            print("TRENDING:", uname, "followers=", a.get("followers"))
-
+            # keep keyword association + richer profile metadata
             upsert_full_sns_account_tiktok(account_id, a, kw)
-            upsert_posts_and_metrics(account_id, posts_by_author.get(uname, []))
-            time.sleep(0.2)
 
-        print(f"Trending accounts for '{kw}': {trending_count}")
+            upsert_accounts_metrics(
+                account_id,
+                a["followers"],
+                a["following"],
+                a.get("maximum_likes"),
+                a.get("posts"),
+            )
+            time.sleep(0.1)
 
-    print("\nDone.")
+    print("\nDiscovery done.")
+
+def run_monitoring() -> None:
+    print("MODE=monitoring")
+    print("Monitoring settings:", {
+        "maxInfluencersPerRun": TIKTOK_MAX_INFLUENCERS_PER_RUN,
+        "postsPerInfluencer": TIKTOK_POSTS_PER_INFLUENCER,
+        "postsRefreshHours": TIKTOK_POSTS_REFRESH_HOURS,
+        "profileActor": APIFY_TIKTOK_PROFILE_ACTOR,
+    })
+
+    # Fetch recent accounts, filter to trending + due for scraping
+    rows = db_tiktok_accounts_for_monitoring(limit=500)
+
+    due: List[Dict[str, Any]] = []
+    for r in rows:
+        if not r.get("account_name"):
+            continue
+        if not should_scrape_posts_now(r):
+            continue
+        account_id = int(r["id"])
+        if not is_trending_db_only(account_id):
+            continue
+        due.append(r)
+
+    # cap per run
+    due = due[:TIKTOK_MAX_INFLUENCERS_PER_RUN]
+    print("Trending & due accounts:", len(due))
+
+    for acc in due:
+        account_id = int(acc["id"])
+        username = str(acc.get("account_name") or "").lstrip("@")
+        if not username:
+            continue
+
+        print(f"Scraping posts for @{username} (id={account_id})")
+        payload = build_profile_payload(username)
+        items = apify_run_actor_sync_get_items(APIFY_TIKTOK_PROFILE_ACTOR, payload)
+        print("  items:", len(items))
+
+        upsert_posts_and_metrics(account_id, items)
+        mark_posts_scraped(account_id)
+
+        time.sleep(0.2)
+
+    print("\nMonitoring done.")
+
+# -----------------------
+# Main
+# -----------------------
+def main() -> None:
+    if MODE == "discovery":
+        run_discovery()
+    elif MODE == "monitoring":
+        run_monitoring()
+    else:
+        raise RuntimeError("MODE must be 'discovery' or 'monitoring'")
 
 if __name__ == "__main__":
     main()

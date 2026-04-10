@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react"
-import { Home, Search, Inbox, User2, ChevronUp } from "lucide-react"
+import { Home, Search, Inbox, Bookmark, User2, ChevronUp } from "lucide-react"
 import { Link } from "react-router-dom"
 
 import {
@@ -33,6 +33,7 @@ export type AppSidebarProps = {
   homeUrl?: string
   searchUrl?: string
   campaignUrl?: string
+  bookmarkUrl?: string
   onSignOut?: () => void
 }
 
@@ -41,6 +42,7 @@ export function AppSidebar({
   homeUrl = "/home",
   searchUrl = "/search/search",
   campaignUrl = "/campaign",
+  bookmarkUrl = "/bookmark",
   onSignOut,
 }: AppSidebarProps) {
   const items: SidebarItem[] = [
@@ -61,6 +63,12 @@ export function AppSidebar({
       url: activeItem === "campaign" ? "/campaign" : campaignUrl,
       icon: Inbox,
       key: "campaign",
+    },
+    {
+      title: "ブックマーク",
+      url: bookmarkUrl,
+      icon: Bookmark,
+      key: "bookmark",
     },
   ]
 

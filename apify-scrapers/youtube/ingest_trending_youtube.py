@@ -4,9 +4,11 @@ import json
 import random
 import time
 import requests
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, Set
-
+from urllib.parse import quote
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -45,33 +47,16 @@ def utcnow_iso() -> str:
 def today_iso() -> str:
     return date.today().isoformat()
 
+def iso_to_dt(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
 def norm_text(s: Optional[str]) -> str:
     return (s or "").strip().lower()
-
-def is_unusable_youtube_avatar(url: Optional[str]) -> bool:
-    if not url:
-        return True
-    s = str(url).strip()
-    if not s:
-        return True
-    lower = s.lower()
-    if not (lower.startswith("http://") or lower.startswith("https://")):
-        return True
-    if "youtube.com/img/favicon" in lower:
-        return True
-    if "/s/desktop/" in lower:
-        return True
-    if "youtube" in lower and "favicon" in lower:
-        return True
-    return False
-
-def normalize_profile_image_url(url: Any) -> Optional[str]:
-    if url is None:
-        return None
-    s = str(url).strip()
-    if is_unusable_youtube_avatar(s):
-        return None
-    return s
 
 def first(it: Dict[str, Any], *keys: str) -> Any:
     for k in keys:
@@ -105,50 +90,116 @@ def iso_from_any_date(v: Any) -> Optional[str]:
     s = str(v).strip()
     if not s:
         return None
-
-    m = re.match(r"^\d{4}-\d{2}-\d{2}$", s)
-    if m:
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
         try:
             dt = datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
             return dt.isoformat()
         except Exception:
             return None
-
     try:
         return datetime.fromisoformat(s.replace("Z", "+00:00")).isoformat()
     except Exception:
         return None
 
+def build_http_session() -> requests.Session:
+    s = requests.Session()
+    retries = Retry(
+        total=3,
+        backoff_factor=0.6,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET", "POST", "PUT"]),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    s.mount("http://", adapter)
+    s.mount("https://", adapter)
+    return s
+
+HTTP = build_http_session()
+
+def is_unusable_youtube_avatar(url: Optional[str]) -> bool:
+    if not url:
+        return True
+    s = str(url).strip()
+    if not s:
+        return True
+    lower = s.lower()
+    if not (lower.startswith("http://") or lower.startswith("https://")):
+        return True
+    if "youtube.com/img/favicon" in lower:
+        return True
+    if "/s/desktop/" in lower:
+        return True
+    if "youtube" in lower and "favicon" in lower:
+        return True
+    return False
+
+def normalize_profile_image_url(url: Any) -> Optional[str]:
+    if url is None:
+        return None
+    s = str(url).strip()
+    if is_unusable_youtube_avatar(s):
+        return None
+    return s
+
 # -----------------------
 # Config
 # -----------------------
+MODE = env_str("MODE", "discovery").lower()  # discovery | monitoring
+
 APIFY_TOKEN = must_env("APIFY_TOKEN")
 SUPABASE_URL = must_env("SUPABASE_URL").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = must_env("SUPABASE_SERVICE_ROLE_KEY")
-PROFILE_IMAGE_BUCKET = os.getenv("PROFILE_IMAGE_BUCKET", "profile_images").strip() or "profile_images"
+PROFILE_IMAGE_BUCKET = env_str("PROFILE_IMAGE_BUCKET", "profile_images") or "profile_images"
 
-# Default profile image URL (optional). Leave empty to avoid storing bad placeholders.
-DEFAULT_PROFILE_IMAGE_URL = os.getenv(
+DEFAULT_PROFILE_IMAGE_URL = env_str(
     "DEFAULT_PROFILE_IMAGE_URL",
-    "",
+    "https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y",
 ).strip()
 
-KEYWORD_POOL = ["グルメ", "コスメ"]
-YT_KEYWORDS_PER_RUN = env_int("YT_KEYWORDS_PER_RUN", 5)
+KEYWORD_POOL = [
+'コスメ',
+'スキンケア',
+'メイク',
+'グルメ',
+'レシピ',
+'ファッション',
+'ガジェット',
+'家電',
+'ダイエット',
+'筋トレ',
+'旅行',
+'Vlog',
+'ルーティン',
+'比較',
+'レビュー',
+'開封',
+'ベストバイ',
+'育児',
+'ヘアケア',
+'美容']
 
+# Discovery knobs
+YT_KEYWORDS_PER_RUN = env_int("YT_KEYWORDS_PER_RUN", 15)       
 YT_MAX_RESULTS = env_int("YT_MAX_RESULTS", 120)
 YT_MAX_SHORTS = env_int("YT_MAX_SHORTS", 0)
 YT_MAX_STREAMS = env_int("YT_MAX_STREAMS", 0)
 YT_SORTING_ORDER = env_str("YT_SORTING_ORDER", "relevance")
 YT_DATE_FILTER = env_str("YT_DATE_FILTER", "")
 
+# DB gating knobs (discovery)
+DISCOVERY_STALE_DAYS = env_int("DISCOVERY_STALE_DAYS", 21)
+MIN_DB_CANDIDATES_PER_KEYWORD = env_int("MIN_DB_CANDIDATES_PER_KEYWORD", 60)
+MAX_DB_CANDIDATES_FETCH = env_int("MAX_DB_CANDIDATES_FETCH", 300)
+
+# Monitoring knobs
+YT_MAX_CHANNELS_PER_RUN = env_int("YT_MAX_CHANNELS_PER_RUN", 40)
 YT_TRENDING_CHANNEL_MAX_RESULTS = env_int("YT_TRENDING_CHANNEL_MAX_RESULTS", 30)
+YT_POSTS_REFRESH_HOURS = env_int("YT_POSTS_REFRESH_HOURS", 6)  
 
 MIN_FOLLOWERS = env_int("MIN_FOLLOWERS", 10_000)
 
-JP_STRICT = env_bool("JP_STRICT", True)
-INFLUENCER_STRICT = env_bool("INFLUENCER_STRICT", False)
-
+# Trending thresholds
 HIGH_FOLLOWERS_THRESHOLD = env_int("HIGH_FOLLOWERS_THRESHOLD", 100_000)
 MIN_DAILY_GROWTH_PCT = env_float("MIN_DAILY_GROWTH_PCT", 0.5)
 MIN_DAILY_GROWTH_ABS = env_int("MIN_DAILY_GROWTH_ABS", 500)
@@ -156,26 +207,29 @@ TREND_DAYS = env_int("TREND_DAYS", 3)
 
 CYCLE_STATE_PATH = os.path.join(os.path.dirname(__file__), ".keyword_cycle_youtube.json")
 
+JP_STRICT = env_bool("JP_STRICT", True)
+INFLUENCER_STRICT = env_bool("INFLUENCER_STRICT", False)
+
+# -----------------------
+# Influencer heuristics
+# -----------------------
 COMPANY_BIO_KEYWORDS = {
     "official", "brand", "shop", "store", "customer service", "support", "press",
     "pr", "sales", "shipping", "worldwide shipping", "order", "orders", "buy",
     "discount", "promo", "promotion", "wholesale", "stockist",
     "headquarters", "hq", "contact us", "email us", "business inquiries",
-    "corp", "corporation", "company", "inc", "ltd", "llc", "co.", "gmbh", "plc", "news"
+    "corp", "corporation", "company", "inc", "ltd", "llc", "co.", "gmbh", "plc", "news", "staff"
 }
-
 COMPANY_NAME_TOKENS = {
     "inc", "ltd", "llc", "corp", "co", "company", "group", "official", "shop", "store",
-    "studio", "agency", "brand", "boutique", "restaurant", "hotel", "clinic", "news"
+    "studio", "agency", "brand", "boutique", "restaurant", "hotel", "clinic", "news", "staff"
 }
-
 PERSON_HINT_KEYWORDS = {
     "creator", "influencer", "model", "blogger", "youtuber", "streamer",
     "photographer", "artist", "stylist", "fashion", "fitness",
     "dad", "mom", "student", "she/her", "he/him", "they/them",
     "personal", "my life", "vlog",
 }
-
 JP_CHAR_RE = re.compile(r"[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]")
 
 def _profile_text(profile: Dict[str, Any]) -> Tuple[str, str, str]:
@@ -187,8 +241,12 @@ def _profile_text(profile: Dict[str, Any]) -> Tuple[str, str, str]:
 def looks_like_company(profile: Dict[str, Any]) -> bool:
     username, full_name, bio = _profile_text(profile)
 
+    def _tokenize(s: str) -> List[str]:
+        return [p for p in re.split(r"[^a-z0-9]+", s) if p]
+
+    name_tokens = set(_tokenize(full_name)) | set(_tokenize(username))
     for tok in COMPANY_NAME_TOKENS:
-        if f" {tok} " in f" {full_name} " or f" {tok} " in f" {username} ":
+        if tok in name_tokens:
             return True
 
     for kw in COMPANY_BIO_KEYWORDS:
@@ -197,19 +255,15 @@ def looks_like_company(profile: Dict[str, Any]) -> bool:
 
     if "link in bio" in bio and ("shop" in bio or "order" in bio or "discount" in bio):
         return True
-
     return False
 
 def looks_like_person(profile: Dict[str, Any]) -> bool:
     _, full_name, bio = _profile_text(profile)
-
     for kw in PERSON_HINT_KEYWORDS:
         if kw in bio:
             return True
-
     if len(full_name.split()) >= 2 and all(len(x) >= 2 for x in full_name.split()[:2]):
         return True
-
     return False
 
 def is_japanese_influencer(profile: Dict[str, Any]) -> bool:
@@ -230,7 +284,7 @@ def influencer_filter(profile: Dict[str, Any]) -> bool:
     return True
 
 # -----------------------
-# Supabase REST helpers
+# Supabase helpers
 # -----------------------
 def sb_headers(prefer: Optional[str] = None) -> Dict[str, str]:
     h = {
@@ -281,6 +335,12 @@ def sb_upsert(table: str, rows: List[Dict[str, Any]], on_conflict: Optional[str]
     out = r.json()
     return out if isinstance(out, list) else []
 
+def sb_patch(table: str, where_params: Dict[str, str], fields: Dict[str, Any]) -> None:
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    r = requests.patch(url, params=where_params, headers=sb_headers("return=minimal"), data=json.dumps(fields), timeout=60)
+    if not r.ok:
+        raise RuntimeError(f"Supabase PATCH error {r.status_code}: {r.text[:800]}")
+
 def supabase_table_columns(table: str) -> Set[str]:
     try:
         rows = sb_get(table, {"select": "*", "limit": "1"})
@@ -288,9 +348,9 @@ def supabase_table_columns(table: str) -> Set[str]:
             return set(rows[0].keys())
     except Exception:
         pass
-    return {"post_id", "likes", "comments", "views", "created_at"}
+    return {"post_id", "captured_at", "views", "likes", "comments_count", "like_view_rate", "comment_view_rate"}
 
-POST_METRICS_COLUMNS = supabase_table_columns("post_metrics")
+POST_METRIC_SNAPSHOTS_COLUMNS = supabase_table_columns("post_metrics_snapshots")
 
 # -----------------------
 # Storage (profile images)
@@ -312,21 +372,52 @@ def infer_image_ext(content_type: str, url: str) -> str:
     return ".jpg"
 
 def storage_public_url(object_path: str) -> str:
-    return f"{SUPABASE_URL}/storage/v1/object/public/{PROFILE_IMAGE_BUCKET}/{object_path}"
+    encoded = quote(object_path, safe="/")
+    return f"{SUPABASE_URL}/storage/v1/object/public/{PROFILE_IMAGE_BUCKET}/{encoded}"
 
-# ✅ CHANGED: use browser-like headers (Googleusercontent can be picky)
-def image_download_headers(referer: str = "https://www.youtube.com/") -> Dict[str, str]:
-    return {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36",
+def image_download_headers(referer: Optional[str] = None) -> Dict[str, str]:
+    h = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36"
+        ),
         "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-        "Referer": referer,
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
     }
+    if referer:
+        h["Referer"] = referer
+    return h
+
+def download_image_bytes(image_url: str) -> Tuple[Optional[bytes], Optional[str]]:
+    header_variants = [
+        image_download_headers("https://www.youtube.com/"),
+        image_download_headers(None),
+    ]
+    for headers in header_variants:
+        try:
+            r = HTTP.get(image_url, headers=headers, timeout=30, allow_redirects=True, stream=True)
+            if r.status_code >= 400:
+                continue
+            content_type = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if not content_type.startswith("image/"):
+                chunk = next(r.iter_content(chunk_size=256), b"")
+                if b"<html" in chunk.lower() or b"<!doctype" in chunk.lower():
+                    continue
+            data = r.content
+            if not data or len(data) < 200:
+                continue
+            if not content_type.startswith("image/"):
+                content_type = "image/jpeg"
+            return data, content_type
+        except Exception:
+            continue
+    return None, None
 
 def upload_profile_image(image_url: Optional[str], platform_user_id: str) -> Optional[str]:
     if not image_url:
         return None
-
     image_url = str(image_url).strip()
     if not image_url:
         return None
@@ -335,36 +426,23 @@ def upload_profile_image(image_url: Optional[str], platform_user_id: str) -> Opt
     if image_url.startswith(public_prefix):
         return image_url
 
+    data, content_type = download_image_bytes(image_url)
+    if not data or not content_type:
+        return None
+
+    ext = infer_image_ext(content_type, image_url)
+    safe_id = re.sub(r"[^a-zA-Z0-9_\-\.]", "_", str(platform_user_id))
+    object_path = f"youtube/{safe_id}{ext}"
+
+    encoded_path = quote(object_path, safe="/")
+    upload_url = f"{SUPABASE_URL}/storage/v1/object/{PROFILE_IMAGE_BUCKET}/{encoded_path}"
+
     try:
-        # ✅ CHANGED: pass headers to reduce 404/redirect weirdness
-        resp = requests.get(image_url, headers=image_download_headers(), timeout=30, allow_redirects=True)
-        if not resp.ok:
-            print(f"Image download failed {resp.status_code}: {image_url}")
-            return None
-
-        # ✅ CHANGED: ensure we downloaded an image, not HTML
-        content_type = (resp.headers.get("Content-Type") or "image/jpeg").split(";")[0].strip().lower()
-        if not content_type.startswith("image/"):
-            print(f"Not an image (Content-Type={content_type}): {image_url}")
-            return None
-
-        ext = infer_image_ext(content_type, image_url)
-        object_path = f"youtube/{platform_user_id}{ext}"
-        upload_url = f"{SUPABASE_URL}/storage/v1/object/{PROFILE_IMAGE_BUCKET}/{object_path}"
-
-        up = requests.post(
-            upload_url,
-            headers=sb_storage_headers(content_type, upsert=True),
-            data=resp.content,
-            timeout=30,
-        )
+        up = HTTP.post(upload_url, headers=sb_storage_headers(content_type, upsert=True), data=data, timeout=30)
         if not up.ok:
-            print(f"Storage upload failed {up.status_code}: {up.text[:200]}")
             return None
-
         return storage_public_url(object_path)
-    except Exception as exc:
-        print(f"Image upload error: {exc}")
+    except Exception:
         return None
 
 # -----------------------
@@ -381,16 +459,15 @@ def load_keyword_cycle(pool: List[str]) -> List[str]:
             return [k for k in remaining if k in pool]
     except FileNotFoundError:
         return []
-    except Exception as exc:
-        print(f"Keyword cycle load error: {exc}")
+    except Exception:
         return []
 
 def save_keyword_cycle(remaining: List[str]) -> None:
     try:
         with open(CYCLE_STATE_PATH, "w", encoding="utf-8") as f:
             json.dump({"remaining": remaining}, f, ensure_ascii=False)
-    except Exception as exc:
-        print(f"Keyword cycle save error: {exc}")
+    except Exception:
+        return
 
 def pick_keywords_for_run(pool: List[str], count: int) -> List[str]:
     cleaned = [k.strip() for k in pool if k and k.strip()]
@@ -419,16 +496,22 @@ def pick_keywords_for_run(pool: List[str], count: int) -> List[str]:
 # -----------------------
 def apify_run_youtube(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     url = "https://api.apify.com/v2/acts/streamers~youtube-scraper/run-sync-get-dataset-items"
-    r = requests.post(url, params={"token": APIFY_TOKEN}, json=payload, timeout=300)
-    if not r.ok:
-        raise RuntimeError(f"Apify error {r.status_code}: {r.text[:800]}")
-    data = r.json()
-    if not isinstance(data, list):
-        raise RuntimeError(f"Unexpected Apify response: {str(data)[:800]}")
-    return data
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            r = requests.post(url, params={"token": APIFY_TOKEN}, json=payload, timeout=600)
+            if not r.ok:
+                raise RuntimeError(f"Apify error {r.status_code}: {r.text[:800]}")
+            data = r.json()
+            return data if isinstance(data, list) else []
+        except requests.exceptions.ReadTimeout:
+            if attempt >= max_attempts:
+                raise
+            time.sleep(5 * attempt)
+    return []
 
 # -----------------------
-# Parsing (channel + video)
+# Parsing
 # -----------------------
 CHANNEL_ID_RE = re.compile(r"(?:youtube\.com/(?:channel/|@))([^/?#]+)", re.I)
 
@@ -445,27 +528,24 @@ def parse_channel_from_item(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     channel_name = first(it, "channelName")
     channel_url = first(it, "channelUrl", "inputChannelUrl", "fromYTUrl")
 
-    # ✅ CHANGED: handle subs from multiple places (your dataset has numberOfSubscribers=0 but aboutChannelInfo has it)
+    about = it.get("aboutChannelInfo") or {}
+    if not isinstance(about, dict):
+        about = {}
+
     subs = to_int(first(it, "numberOfSubscribers", "subscribers", "subscriberCount"))
     if not subs:
-        about = it.get("aboutChannelInfo") or {}
-        if isinstance(about, dict):
-            subs = to_int(first(about, "numberOfSubscribers", "subscriberCount"))
-
+        subs = to_int(first(about, "numberOfSubscribers", "subscriberCount"))
     subscribers = int(subs or 0)
 
-    # ✅ CHANGED: prefer channelAvatarUrl (and nested aboutChannelInfo.channelAvatarUrl)
-    avatar_url = first(
-        it,
-        "channelAvatarUrl",          # present in your example
-        "channelAvatar", "avatarUrl", "avatar"
-    )
+    avatar_url = first(it, "channelAvatarUrl", "channelAvatar", "avatarUrl", "avatar")
     if not avatar_url:
-        about = it.get("aboutChannelInfo") or {}
-        if isinstance(about, dict):
-            avatar_url = first(about, "channelAvatarUrl", "channelAvatar", "avatarUrl", "avatar")
+        avatar_url = first(about, "channelAvatarUrl", "channelAvatar", "avatarUrl", "avatar")
 
     profile_image_url = normalize_profile_image_url(avatar_url)
+    if not profile_image_url and avatar_url:
+        s = str(avatar_url).strip()
+        if s.startswith(("http://", "https://")) and ("yt3.googleusercontent.com" in s or "yt3.ggpht.com" in s):
+            profile_image_url = s
 
     if not channel_name and not channel_url:
         return None
@@ -474,16 +554,16 @@ def parse_channel_from_item(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not key:
         return None
 
-    account_name = key
-
     return {
-        "account_name": account_name,
+        "account_name": key,
         "display_name": channel_name,
-        "account_url": channel_url or (f"https://www.youtube.com/@{account_name}" if account_name else None),
+        "account_url": channel_url or f"https://www.youtube.com/@{key}",
         "caption": first(it, "channelDescription"),
-        "profile_image_url": profile_image_url,  # may be None
+        "profile_image_url": profile_image_url,
         "followers": subscribers,
         "following": 0,
+        "maximum_likes": to_int(first(it, "likes")),
+        "posts": to_int(first(about, "channelTotalVideos")),
         "is_verified": None,
     }
 
@@ -508,12 +588,8 @@ def parse_video_from_item(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "link": str(url),
         "posted_at": posted_at,
         "scraped_at": utcnow_iso(),
-        "metrics": {
-            "likes": likes,
-            "comments": comments,
-            "views": views,
-        },
-    }
+        "metrics": {"likes": likes, "comments_count": comments, "views": views},    
+        }
 
 # -----------------------
 # Trending logic (DB-only)
@@ -525,10 +601,7 @@ def get_recent_followers_series(account_id: int, points: int) -> List[Tuple[str,
         "order": "metric_date.desc",
         "limit": str(points),
     })
-    out: List[Tuple[str, int]] = []
-    for r in rows:
-        out.append((str(r.get("metric_date")), int(r.get("followers") or 0)))
-    return out
+    return [(str(r.get("metric_date")), int(r.get("followers") or 0)) for r in rows]
 
 def is_trending_db_only(account_id: int) -> bool:
     series = get_recent_followers_series(account_id, TREND_DAYS + 1)
@@ -538,16 +611,10 @@ def is_trending_db_only(account_id: int) -> bool:
     latest_followers = series[0][1]
     if latest_followers >= HIGH_FOLLOWERS_THRESHOLD:
         return True
-
     if len(series) < TREND_DAYS + 1:
         return False
 
-    deltas: List[int] = []
-    for i in range(TREND_DAYS):
-        latest = series[i][1]
-        prev = series[i + 1][1]
-        deltas.append(latest - prev)
-
+    deltas = [series[i][1] - series[i + 1][1] for i in range(TREND_DAYS)]
     if any(d <= 0 for d in deltas):
         return False
 
@@ -559,10 +626,7 @@ def is_trending_db_only(account_id: int) -> bool:
         return True
     if pct >= MIN_DAILY_GROWTH_PCT:
         return True
-
-    avg_delta = sum(deltas) / len(deltas)
-    avg_pct = (avg_delta * 100.0 / prev_followers) if prev_followers > 0 else 0.0
-    return (avg_delta >= MIN_DAILY_GROWTH_ABS) or (avg_pct >= MIN_DAILY_GROWTH_PCT)
+    return False
 
 # -----------------------
 # DB helpers
@@ -579,41 +643,28 @@ def merge_keywords(existing: Optional[str], new_kw: str) -> str:
         parts.append(new_kw)
     return ", ".join(parts)
 
-# ✅ CHANGED: accept profile_image_url so minimal row isn't stuck at default forever
-def ensure_minimal_account_row(account_name: str, account_url: str, profile_image_url: Optional[str]) -> int:
-    clean_profile_url = normalize_profile_image_url(profile_image_url)
-    if not clean_profile_url and DEFAULT_PROFILE_IMAGE_URL:
-        clean_profile_url = DEFAULT_PROFILE_IMAGE_URL
-
+def ensure_minimal_account_row(account_name: str, account_url: str, keyword: str) -> int:
     row = {
         "platform": "youtube",
         "account_name": account_name,
         "account_url": account_url,
+        "profile_image_url": DEFAULT_PROFILE_IMAGE_URL,  # minimal placeholder
+        "keywords": (keyword or "").strip() or None,
+        "last_profile_scraped_at": utcnow_iso(),
     }
-    if clean_profile_url:
-        row["profile_image_url"] = clean_profile_url
-
-    resp = sb_upsert(
-        "sns_accounts",
-        [row],
-        on_conflict="platform,account_name",
-        select="id",
-    )
+    resp = sb_upsert("sns_accounts", [row], on_conflict="platform,account_name", select="id")
     return int(resp[0]["id"])
 
-def upsert_accounts_metrics(account_id: int, followers: int) -> None:
-    sb_upsert(
-        "accounts_metrics",
-        [{
-            "account_id": account_id,
-            "metric_date": today_iso(),
-            "followers": int(followers or 0),
-            "following": 0,
-            "created_at": utcnow_iso(),
-        }],
-        on_conflict="account_id,metric_date",
-        select="id",
-    )
+def upsert_accounts_metrics(account_id: int, followers: int, maximum_likes: Optional[int], posts: Optional[int]) -> None:
+    sb_upsert("accounts_metrics", [{
+        "account_id": account_id,
+        "metric_date": today_iso(),
+        "followers": int(followers or 0),
+        "following": 0,
+        "maximum_likes": maximum_likes,
+        "posts": int(posts or 0),
+        "created_at": utcnow_iso(),
+    }], on_conflict="account_id,metric_date", select="id")
 
 def upsert_full_sns_account_youtube(account_id: int, channel: Dict[str, Any], keyword: str) -> None:
     existing = sb_get("sns_accounts", {"select": "id,keywords", "id": f"eq.{account_id}", "limit": "1"})
@@ -621,11 +672,8 @@ def upsert_full_sns_account_youtube(account_id: int, channel: Dict[str, Any], ke
     merged = merge_keywords(existing_keywords, keyword)
 
     clean_profile_url = normalize_profile_image_url(channel.get("profile_image_url"))
-    stored_image_url = upload_profile_image(
-        clean_profile_url,
-        channel.get("account_name") or str(account_id),
-    )
-    final_profile_url = stored_image_url or clean_profile_url or (DEFAULT_PROFILE_IMAGE_URL if DEFAULT_PROFILE_IMAGE_URL else None)
+    stored_image_url = upload_profile_image(clean_profile_url, channel.get("account_name") or str(account_id))
+    final_profile_url = stored_image_url or clean_profile_url or DEFAULT_PROFILE_IMAGE_URL
 
     row = {
         "id": account_id,
@@ -637,9 +685,9 @@ def upsert_full_sns_account_youtube(account_id: int, channel: Dict[str, Any], ke
         "language": "ja",
         "country": "JP",
         "keywords": merged,
+        "profile_image_url": final_profile_url,
+        "last_profile_scraped_at": utcnow_iso(),
     }
-    if final_profile_url:
-        row["profile_image_url"] = final_profile_url
     sb_upsert("sns_accounts", [row], on_conflict="id", select="id")
 
 def upsert_posts_and_metrics(account_id: int, items_raw: List[Dict[str, Any]]) -> None:
@@ -660,47 +708,106 @@ def upsert_posts_and_metrics(account_id: int, items_raw: List[Dict[str, Any]]) -
         "collaboration_id": None,
     } for p in parsed]
 
+    # Keep your existing posts upsert behavior
     upserted = sb_upsert("posts", post_rows, on_conflict="external_post_id", select="id,external_post_id")
     post_id_by_ext = {r["external_post_id"]: int(r["id"]) for r in upserted}
 
-    metric_rows: List[Dict[str, Any]] = []
+    # Build snapshot rows for post_metric_snapshots
+    snapshot_rows: List[Dict[str, Any]] = []
+    captured_at = utcnow_iso()
+
     for p in parsed:
         post_id = post_id_by_ext.get(p["external_post_id"])
         if not post_id:
             continue
 
-        row: Dict[str, Any] = {"post_id": post_id, "created_at": utcnow_iso()}
         m = p["metrics"]
+        views = to_int(m.get("views")) or 0
+        likes = to_int(m.get("likes")) or 0
+        comments_count = to_int(m.get("comments_count")) or 0
 
-        if "likes" in POST_METRICS_COLUMNS:
-            row["likes"] = m.get("likes")
-        if "comments" in POST_METRICS_COLUMNS:
-            row["comments"] = m.get("comments")
-        if "views" in POST_METRICS_COLUMNS:
-            row["views"] = m.get("views")
+        row: Dict[str, Any] = {"post_id": post_id}
 
-        metric_rows.append(row)
+        # Snapshot timestamps
+        if "captured_at" in POST_METRIC_SNAPSHOTS_COLUMNS:
+            row["captured_at"] = captured_at
+        if "created_at" in POST_METRIC_SNAPSHOTS_COLUMNS:
+            row["created_at"] = captured_at
 
-    if metric_rows:
-        sb_upsert("post_metrics", metric_rows, on_conflict=None, select="id")
+        if "views" in POST_METRIC_SNAPSHOTS_COLUMNS:
+            row["views"] = views
+        if "likes" in POST_METRIC_SNAPSHOTS_COLUMNS:
+            row["likes"] = likes
+        if "comments_count" in POST_METRIC_SNAPSHOTS_COLUMNS:
+            row["comments_count"] = comments_count
+        if "duration_seconds" in POST_METRIC_SNAPSHOTS_COLUMNS:
+            row["duration_seconds"] = None
+
+        # Optional computed rates (store as decimals 0..1)
+        if "like_view_rate" in POST_METRIC_SNAPSHOTS_COLUMNS:
+            row["like_view_rate"] = (likes / views) if views > 0 else 0.0
+        if "comment_view_rate" in POST_METRIC_SNAPSHOTS_COLUMNS:
+            row["comment_view_rate"] = (comments_count / views) if views > 0 else 0.0
+
+        snapshot_rows.append(row)
+
+    # Insert snapshots (time-series): do NOT upsert unless you enforce a unique constraint
+    if snapshot_rows:
+        sb_upsert("post_metric_snapshots", snapshot_rows, on_conflict=None, select="id")
+
+def mark_posts_scraped(account_id: int) -> None:
+    sb_patch("sns_accounts", {"id": f"eq.{account_id}"}, {"last_posts_scraped_at": utcnow_iso()})
+
+def should_scrape_posts_now(row: Dict[str, Any]) -> bool:
+    last = iso_to_dt(row.get("last_posts_scraped_at"))
+    if not last:
+        return True
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=YT_POSTS_REFRESH_HOURS)
+    return last < cutoff
 
 # -----------------------
-# Main
+# DB gating for discovery
 # -----------------------
-def main() -> None:
-    keywords = pick_keywords_for_run(KEYWORD_POOL, YT_KEYWORDS_PER_RUN)
-    print("YOUTUBE KEYWORDS:", keywords)
-    print("YouTube settings:", {
-        "maxResults": YT_MAX_RESULTS,
-        "maxShorts": YT_MAX_SHORTS,
-        "maxStreams": YT_MAX_STREAMS,
-        "sortingOrder": YT_SORTING_ORDER,
-        "dateFilter": YT_DATE_FILTER or None,
-        "MIN_FOLLOWERS": MIN_FOLLOWERS,
+def db_candidates_for_keyword(keyword: str) -> List[Dict[str, Any]]:
+    return sb_get("sns_accounts", {
+        "select": "id,platform,account_name,keywords,last_profile_scraped_at",
+        "platform": "eq.youtube",
+        "keywords": f"ilike.*{keyword}*",
+        "limit": str(MAX_DB_CANDIDATES_FETCH),
+        "order": "id.desc",
     })
 
+def keyword_pool_is_stale(rows: List[Dict[str, Any]]) -> bool:
+    if not rows:
+        return True
+    cutoff = datetime.now(timezone.utc) - timedelta(days=DISCOVERY_STALE_DAYS)
+    for r in rows:
+        dt = iso_to_dt(r.get("last_profile_scraped_at"))
+        if dt and dt >= cutoff:
+            return False
+    return True
+
+def db_youtube_accounts_for_monitoring(limit: int) -> List[Dict[str, Any]]:
+    return sb_get("sns_accounts", {
+        "select": "id,platform,account_name,account_url,last_posts_scraped_at",
+        "platform": "eq.youtube",
+        "limit": str(limit),
+        "order": "id.desc",
+    })
+
+# -----------------------
+# Modes
+# -----------------------
+def run_discovery() -> None:
+    keywords = pick_keywords_for_run(KEYWORD_POOL, YT_KEYWORDS_PER_RUN)
+    print("MODE=discovery | keywords:", keywords)
+
     for kw in keywords:
-        print(f"\n=== keyword: {kw} ===")
+        candidates = db_candidates_for_keyword(kw)
+        need = (len(candidates) < MIN_DB_CANDIDATES_PER_KEYWORD) or keyword_pool_is_stale(candidates)
+        print(f"\n=== keyword: {kw} === | DB candidates={len(candidates)} | need_discovery={need}")
+        if not need:
+            continue
 
         payload = {
             "searchQueries": [kw],
@@ -716,70 +823,83 @@ def main() -> None:
         print("Items returned:", len(items))
 
         channels: Dict[str, Dict[str, Any]] = {}
-        items_by_channel: Dict[str, List[Dict[str, Any]]] = {}
-
         for it in items:
             ch = parse_channel_from_item(it)
             if not ch:
                 continue
-
             subs = int(ch.get("followers") or 0)
             if subs < MIN_FOLLOWERS:
                 continue
             if not influencer_filter(ch):
                 continue
+            channels[ch["account_name"]] = ch
 
-            key = ch["account_name"]
-            channels[key] = ch
-            items_by_channel.setdefault(key, []).append(it)
+        print("Channels kept:", len(channels))
 
-        print("Channels kept (>= MIN_FOLLOWERS):", len(channels))
-
-        channel_id_map: Dict[str, int] = {}
         for key, ch in channels.items():
             if not ch.get("account_url"):
                 continue
+            account_id = ensure_minimal_account_row(ch["account_name"], ch["account_url"], kw)
+            upsert_accounts_metrics(account_id, ch["followers"], ch.get("maximum_likes"), ch.get("posts"))
+            time.sleep(0.1)
 
-            # ✅ CHANGED: pass avatar URL into minimal row
-            account_id = ensure_minimal_account_row(
-                ch["account_name"],
-                ch["account_url"],
-                ch.get("profile_image_url"),
-            )
-            channel_id_map[key] = account_id
-            upsert_accounts_metrics(account_id, ch["followers"])
+    print("\nDiscovery done.")
 
-        trending_count = 0
-        for key, account_id in channel_id_map.items():
-            if not is_trending_db_only(account_id):
-                continue
+def run_monitoring() -> None:
+    print("MODE=monitoring")
+    rows = db_youtube_accounts_for_monitoring(limit=800)
 
-            ch = channels[key]
-            trending_count += 1
-            print("TRENDING:", key, "subs=", ch.get("followers"))
+    due: List[Dict[str, Any]] = []
+    for r in rows:
+        if not r.get("account_url"):
+            continue
+        if not should_scrape_posts_now(r):
+            continue
+        account_id = int(r["id"])
+        if not is_trending_db_only(account_id):
+            continue
+        due.append(r)
 
-            upsert_full_sns_account_youtube(account_id, ch, kw)
-            upsert_posts_and_metrics(account_id, items_by_channel.get(key, []))
+    due = due[:YT_MAX_CHANNELS_PER_RUN]
+    print("Trending & due channels:", len(due))
 
-            try:
-                channel_url = ch.get("account_url")
-                if channel_url:
-                    channel_items = apify_run_youtube({
-                        "startUrls": [{"url": channel_url}],
-                        "maxResults": YT_TRENDING_CHANNEL_MAX_RESULTS,
-                        "maxResultsShorts": 0,
-                        "maxResultStreams": 0,
-                        "sortingOrder": "date",
-                    })
-                    upsert_posts_and_metrics(account_id, channel_items)
-            except Exception as exc:
-                print("Channel deep-scrape failed:", exc)
+    for acc in due:
+        account_id = int(acc["id"])
+        channel_url = acc.get("account_url")
+        print("Scraping channel:", channel_url, "id=", account_id)
 
-            time.sleep(0.2)
+        # channel timeline scrape
+        channel_items = apify_run_youtube({
+            "startUrls": [{"url": channel_url}],
+            "maxResults": YT_TRENDING_CHANNEL_MAX_RESULTS,
+            "maxResultsShorts": 0,
+            "maxResultStreams": 0,
+            "sortingOrder": "date",
+        })
 
-        print(f"Trending channels for '{kw}': {trending_count}")
+        # refresh channel metadata from any returned item (best-effort)
+        if channel_items:
+            ch = parse_channel_from_item(channel_items[0])
+            if ch:
+                upsert_full_sns_account_youtube(account_id, ch, keyword="")
+                upsert_accounts_metrics(account_id, ch["followers"], ch.get("maximum_likes"), ch.get("posts"))
 
-    print("\nDone.")
+        upsert_posts_and_metrics(account_id, channel_items)
+        mark_posts_scraped(account_id)
+        time.sleep(0.2)
+
+    print("\nMonitoring done.")
+
+# -----------------------
+# Main
+# -----------------------
+def main() -> None:
+    if MODE == "discovery":
+        run_discovery()
+    elif MODE == "monitoring":
+        run_monitoring()
+    else:
+        raise RuntimeError("MODE must be 'discovery' or 'monitoring'")
 
 if __name__ == "__main__":
     main()

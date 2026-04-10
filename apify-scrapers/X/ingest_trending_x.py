@@ -4,11 +4,10 @@ import json
 import random
 import time
 import requests
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, Set
 
 from dotenv import load_dotenv
-
 load_dotenv()
 
 # -----------------------
@@ -45,6 +44,14 @@ def utcnow_iso() -> str:
 def today_iso() -> str:
     return date.today().isoformat()
 
+def iso_to_dt(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
 def norm_text(s: Optional[str]) -> str:
     return (s or "").strip().lower()
 
@@ -71,46 +78,84 @@ def safe_int(v: Any, default: int = 0) -> int:
 # -----------------------
 # Config
 # -----------------------
+MODE = env_str("MODE", "discovery").lower()  # discovery | monitoring
+
 APIFY_TOKEN = must_env("APIFY_TOKEN")
 SUPABASE_URL = must_env("SUPABASE_URL").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = must_env("SUPABASE_SERVICE_ROLE_KEY")
-PROFILE_IMAGE_BUCKET = os.getenv("PROFILE_IMAGE_BUCKET", "profile_images").strip() or "profile_images"
+PROFILE_IMAGE_BUCKET = env_str("PROFILE_IMAGE_BUCKET", "profile_images") or "profile_images"
 
-DEFAULT_PROFILE_IMAGE_URL = os.getenv(
+DEFAULT_PROFILE_IMAGE_URL = env_str(
     "DEFAULT_PROFILE_IMAGE_URL",
     "https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png"
 )
 
-KEYWORD_POOL = ["グルメ", "コスメ"]
-X_KEYWORDS_PER_RUN = env_int("X_KEYWORDS_PER_RUN", 5)
-X_MAX_ITEMS = env_int("X_MAX_ITEMS", 300)
+KEYWORD_POOL = [
+'コスメ',
+'スキンケア',
+'グルメ',
+'新商品',
+'レビュー',
+'開封',
+'ファッション',
+'ガジェット',
+'家電',
+'ダイエット',
+'筋トレ',
+'旅行',
+'カフェ',
+'おすすめ',
+'比較',
+'ベストバイ',
+'育児',
+'美容',
+'ルーティン',
+'ライフスタイル']
+
+# Discovery knobs
+X_KEYWORDS_PER_RUN = env_int("X_KEYWORDS_PER_RUN", 20)    
+X_MAX_ITEMS = env_int("X_MAX_ITEMS", 200)                  
 X_TWEET_LANGUAGE = env_str("X_TWEET_LANGUAGE", "ja")
 X_SORT = env_str("X_SORT", "Latest")
 
+# Monitoring knobs
+X_MAX_INFLUENCERS_PER_RUN = env_int("X_MAX_INFLUENCERS_PER_RUN", 60)
+X_TWEETS_PER_INFLUENCER = env_int("X_TWEETS_PER_INFLUENCER", 25) 
+X_POSTS_REFRESH_HOURS = env_int("X_POSTS_REFRESH_HOURS", 3)      
+
 MIN_FOLLOWERS = env_int("MIN_FOLLOWERS", 10_000)
-X_MAX_TWEETS_PER_AUTHOR = env_int("X_MAX_TWEETS_PER_AUTHOR", 50)
 
-JP_STRICT = env_bool("JP_STRICT", True)
-INFLUENCER_STRICT = env_bool("INFLUENCER_STRICT", False)
-
+# Trending thresholds
 HIGH_FOLLOWERS_THRESHOLD = env_int("HIGH_FOLLOWERS_THRESHOLD", 100_000)
 MIN_DAILY_GROWTH_PCT = env_float("MIN_DAILY_GROWTH_PCT", 0.5)
 MIN_DAILY_GROWTH_ABS = env_int("MIN_DAILY_GROWTH_ABS", 500)
 TREND_DAYS = env_int("TREND_DAYS", 3)
 
+# DB gating knobs (discovery)
+DISCOVERY_STALE_DAYS = env_int("DISCOVERY_STALE_DAYS", 14)
+MIN_DB_CANDIDATES_PER_KEYWORD = env_int("MIN_DB_CANDIDATES_PER_KEYWORD", 80)
+MAX_DB_CANDIDATES_FETCH = env_int("MAX_DB_CANDIDATES_FETCH", 300)
+
+# cycle state
 CYCLE_STATE_PATH = os.path.join(os.path.dirname(__file__), ".keyword_cycle_x.json")
 
+JP_STRICT = env_bool("JP_STRICT", True)
+INFLUENCER_STRICT = env_bool("INFLUENCER_STRICT", False)
+
+# -----------------------
+# Influencer heuristics
+# -----------------------
 COMPANY_BIO_KEYWORDS = {
     "official", "brand", "shop", "store", "customer service", "support", "press",
     "pr", "sales", "shipping", "worldwide shipping", "order", "orders", "buy",
     "discount", "promo", "promotion", "wholesale", "stockist",
     "headquarters", "hq", "contact us", "email us", "business inquiries",
-    "corp", "corporation", "company", "inc", "ltd", "llc", "co.", "gmbh", "plc", "news"
+    "corp", "corporation", "company", "inc", "ltd", "llc", "co.", "gmbh", "plc", "news", "staff"
 }
 
 COMPANY_NAME_TOKENS = {
     "inc", "ltd", "llc", "corp", "co", "company", "group", "official", "shop", "store",
-    "studio", "agency", "brand", "boutique", "restaurant", "hotel", "clinic", "news", "show"
+    "studio", "agency", "brand", "boutique", "restaurant", "hotel", "clinic", "news", "show", "staff"
 }
 
 PERSON_HINT_KEYWORDS = {
@@ -136,8 +181,12 @@ def _profile_text(profile: Dict[str, Any]) -> Tuple[str, str, str]:
 def looks_like_company(profile: Dict[str, Any]) -> bool:
     username, full_name, bio = _profile_text(profile)
 
+    def _tokenize(s: str) -> List[str]:
+        return [p for p in re.split(r"[^a-z0-9]+", s) if p]
+
+    name_tokens = set(_tokenize(full_name)) | set(_tokenize(username))
     for tok in COMPANY_NAME_TOKENS:
-        if f" {tok} " in f" {full_name} " or f" {tok} " in f" {username} ":
+        if tok in name_tokens:
             return True
 
     for kw in COMPANY_BIO_KEYWORDS:
@@ -168,16 +217,12 @@ def is_japanese_influencer(profile: Dict[str, Any]) -> bool:
 def influencer_filter(profile: Dict[str, Any]) -> bool:
     if safe_int(profile.get("followers"), 0) < MIN_FOLLOWERS:
         return False
-
     if JP_STRICT and not is_japanese_influencer(profile):
         return False
-
     if looks_like_company(profile):
         return False
-
     if not looks_like_person(profile):
         return False
-
     return True
 
 # -----------------------
@@ -232,10 +277,13 @@ def sb_upsert(table: str, rows: List[Dict[str, Any]], on_conflict: Optional[str]
     out = r.json()
     return out if isinstance(out, list) else []
 
+def sb_patch(table: str, where_params: Dict[str, str], fields: Dict[str, Any]) -> None:
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    r = requests.patch(url, params=where_params, headers=sb_headers("return=minimal"), data=json.dumps(fields), timeout=60)
+    if not r.ok:
+        raise RuntimeError(f"Supabase PATCH error {r.status_code}: {r.text[:800]}")
+
 def supabase_table_columns(table: str) -> Set[str]:
-    """
-    Best-effort: infer columns from a sample row. If table is empty, fall back to known sets.
-    """
     try:
         rows = sb_get(table, {"select": "*", "limit": "1"})
         if rows:
@@ -243,18 +291,28 @@ def supabase_table_columns(table: str) -> Set[str]:
     except Exception:
         pass
 
-    if table == "post_metrics":
-        return {"post_id", "likes", "comments", "views", "created_at"}
+    if table == "post_metrics_snapshots":
+        return {
+            "post_id",
+            "views",
+            "likes",
+            "comments_count",
+            "duration_seconds",
+            "like_view_rate",
+            "comment_view_rate",
+            "captured_at",
+            "created_at",
+        }
     if table == "posts":
         return {"id", "account_id", "external_post_id", "content_text", "caption", "link", "posted_at", "scraped_at"}
     if table == "sns_accounts":
-        return {"id", "platform", "account_name", "account_url", "caption", "profile_image_url", "is_verified", "language", "country"}
+        return {"id", "platform", "account_name", "account_url", "caption", "profile_image_url", "is_verified", "language", "country", "keywords", "last_posts_scraped_at", "last_profile_scraped_at"}
     if table == "accounts_metrics":
-        return {"account_id", "metric_date", "followers", "following", "created_at"}
+        return {"account_id", "metric_date", "followers", "following", "created_at", "posts", "maximum_likes"}
     return set()
 
 POSTS_COLUMNS = supabase_table_columns("posts")
-POST_METRICS_COLUMNS = supabase_table_columns("post_metrics")
+POST_METRICS_COLUMNS = supabase_table_columns("post_metrics_snapshots")
 SNS_ACCOUNTS_COLUMNS = supabase_table_columns("sns_accounts")
 ACCOUNTS_METRICS_COLUMNS = supabase_table_columns("accounts_metrics")
 
@@ -301,9 +359,7 @@ def image_download_headers(referer: str = "https://x.com/") -> Dict[str, str]:
 def upload_profile_image(image_url: str, platform_user_id: str) -> Optional[str]:
     if not image_url:
         return None
-
     image_url = image_url.strip()
-
     if is_default_x_avatar(image_url):
         return None
 
@@ -316,32 +372,22 @@ def upload_profile_image(image_url: str, platform_user_id: str) -> Optional[str]
     try:
         resp = requests.get(image_url, headers=image_download_headers(), timeout=30)
         if not resp.ok:
-            print(f"Image download failed {resp.status_code}: {image_url}")
             return None
 
         content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         if not content_type.startswith("image/"):
-            print(f"Not an image (Content-Type={content_type}): {image_url}")
             return None
 
         ext = infer_image_ext(content_type, image_url)
         object_path = f"x/{platform_user_id}{ext}"
         upload_url = f"{SUPABASE_URL}/storage/v1/object/{PROFILE_IMAGE_BUCKET}/{object_path}"
 
-        up = requests.post(
-            upload_url,
-            headers=sb_storage_headers(content_type, upsert=True),
-            data=resp.content,
-            timeout=30,
-        )
+        up = requests.post(upload_url, headers=sb_storage_headers(content_type, upsert=True), data=resp.content, timeout=30)
         if not up.ok:
-            print(f"Storage upload failed {up.status_code}: {up.text[:200]}")
             return None
 
         return storage_public_url(object_path)
-
-    except Exception as exc:
-        print(f"Image upload error: {exc}")
+    except Exception:
         return None
 
 # -----------------------
@@ -358,16 +404,14 @@ def load_keyword_cycle(pool: List[str]) -> List[str]:
             return [k for k in remaining if k in pool]
     except FileNotFoundError:
         return []
-    except Exception as exc:
-        print(f"Keyword cycle load error: {exc}")
+    except Exception:
         return []
 
 def save_keyword_cycle(remaining: List[str]) -> None:
     try:
         with open(CYCLE_STATE_PATH, "w", encoding="utf-8") as f:
             json.dump({"remaining": remaining}, f, ensure_ascii=False)
-    except Exception as exc:
-        print(f"Keyword cycle save error: {exc}")
+    except Exception:
         return
 
 def pick_keywords_for_run(pool: List[str], count: int) -> List[str]:
@@ -393,17 +437,15 @@ def pick_keywords_for_run(pool: List[str], count: int) -> List[str]:
     return selected
 
 # -----------------------
-# Apify
+# Apify: apidojo~tweet-scraper
 # -----------------------
 def apify_run(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     url = "https://api.apify.com/v2/acts/apidojo~tweet-scraper/run-sync-get-dataset-items"
-    r = requests.post(url, params={"token": APIFY_TOKEN}, json=payload, timeout=300)
+    r = requests.post(url, params={"token": APIFY_TOKEN, "clean": "true"}, json=payload, timeout=300)
     if not r.ok:
-        raise RuntimeError(f"Apify error {r.status_code}: {r.text[:800]}")
+        raise RuntimeError(f"Apify error {r.status_code}: {r.text[:1200]}")
     data = r.json()
-    if not isinstance(data, list):
-        raise RuntimeError(f"Unexpected Apify response: {str(data)[:800]}")
-    return data
+    return data if isinstance(data, list) else []
 
 # -----------------------
 # Parsing
@@ -422,7 +464,7 @@ def parse_author(raw_tweet: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     avatar = first(
         a,
-        "profilePicture",       
+        "profilePicture",
         "profilePictureUrl",
         "profileImageUrl",
         "profileImage",
@@ -433,7 +475,6 @@ def parse_author(raw_tweet: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     )
     if isinstance(avatar, dict):
         avatar = first(avatar, "url", "imageUrl", "src")
-
     profile_image_url = str(avatar).strip() if avatar else None
 
     return {
@@ -445,7 +486,8 @@ def parse_author(raw_tweet: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "is_verified": bool(first(a, "isVerified", "verified", "isBlueVerified")) if first(a, "isVerified", "verified", "isBlueVerified") is not None else None,
         "followers": safe_int(first(a, "followersCount", "followers"), 0),
         "following": safe_int(first(a, "friendsCount", "following"), 0),
-        "posts": int(first(a, "mediaCount", "statusesCount", "posts"), 0)
+        "posts": safe_int(first(a, "mediaCount", "statusesCount", "posts"), 0),
+        "maximum_likes": safe_int(first(a, "likeCount", "likes"), 0),
     }
 
 def parse_tweet(raw_tweet: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -453,20 +495,14 @@ def parse_tweet(raw_tweet: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not tid:
         return None
 
-    created_at = first(raw_tweet, "createdAt", "created_at", "time")
-    posted_at = None
-    if created_at:
-        try:
-            posted_at = datetime.fromisoformat(str(created_at).replace("Z", "+00:00")).isoformat()
-        except Exception:
-            posted_at = None
+    posted_at = first(raw_tweet, "createdAt", "created_at", "time")
 
     return {
         "external_post_id": str(tid),
         "content_text": first(raw_tweet, "text", "fullText", "content") or "",
         "caption": first(raw_tweet, "text", "fullText", "content") or "",
         "link": first(raw_tweet, "url", "twitterUrl", "tweetUrl"),
-        "posted_at": first(raw_tweet, "createdAt"),
+        "posted_at": posted_at,
         "scraped_at": utcnow_iso(),
         "metrics": {
             "likes": first(raw_tweet, "likeCount", "favoriteCount", "likes"),
@@ -527,56 +563,58 @@ def is_trending_db_only(account_id: int) -> bool:
 # -----------------------
 # DB helpers
 # -----------------------
-def ensure_minimal_account_row(account_name: str, followers: int, profile_image_url: Optional[str]) -> Optional[int]:
+def merge_keywords(existing: Optional[str], new_kw: str) -> str:
+    new_kw = (new_kw or "").strip()
+    if not new_kw:
+        return existing or ""
+    if not existing:
+        return new_kw
+    parts = [p.strip() for p in existing.split(",") if p.strip()]
+    lower = {p.lower() for p in parts}
+    if new_kw.lower() not in lower:
+        parts.append(new_kw)
+    return ", ".join(parts)
+
+def ensure_minimal_account_row(account_name: str, followers: int, profile_image_url: Optional[str], keyword: str) -> Optional[int]:
     if followers < MIN_FOLLOWERS:
         return None
 
-    # must satisfy NOT NULL
-    img = (profile_image_url or "").strip()
-    if not img:
-        img = DEFAULT_PROFILE_IMAGE_URL
+    img = (profile_image_url or "").strip() or DEFAULT_PROFILE_IMAGE_URL
 
     row = {
         "platform": "x",
         "account_name": account_name,
         "account_url": f"https://x.com/{account_name}",
         "profile_image_url": img,
+        "keywords": (keyword or "").strip() or None,
+        "language": X_TWEET_LANGUAGE,
+        "country": "JP" if X_TWEET_LANGUAGE == "ja" else None,
+        "last_profile_scraped_at": utcnow_iso(),
     }
     row = {k: v for k, v in row.items() if k in SNS_ACCOUNTS_COLUMNS}
 
-    resp = sb_upsert(
-        "sns_accounts",
-        [row],
-        on_conflict="platform,account_name",
-        select="id",
-    )
+    resp = sb_upsert("sns_accounts", [row], on_conflict="platform,account_name", select="id")
     return int(resp[0]["id"])
 
-
-def upsert_accounts_metrics(account_id: int, followers: int, following: int, mediaCount: int) -> None:
+def upsert_accounts_metrics(account_id: int, followers: int, following: int, posts: int, maximum_likes: Optional[int]) -> None:
     row = {
         "account_id": account_id,
         "metric_date": today_iso(),
         "followers": followers,
         "following": following,
         "created_at": utcnow_iso(),
-        "posts": mediaCount,
+        "posts": posts,
+        "maximum_likes": maximum_likes,
     }
     row = {k: v for k, v in row.items() if k in ACCOUNTS_METRICS_COLUMNS}
+    sb_upsert("accounts_metrics", [row], on_conflict="account_id,metric_date", select="id")
 
-    sb_upsert(
-        "accounts_metrics",
-        [row],
-        on_conflict="account_id,metric_date",
-        select="id",
-    )
+def upsert_full_sns_account_x(account_id: int, author: Dict[str, Any], keyword: str) -> None:
+    existing = sb_get("sns_accounts", {"select": "id,keywords", "id": f"eq.{account_id}", "limit": "1"})
+    existing_keywords = existing[0].get("keywords") if existing else None
+    merged = merge_keywords(existing_keywords, keyword)
 
-def upsert_full_sns_account_x(account_id: int, author: Dict[str, Any]) -> None:
-    stored_image_url = upload_profile_image(
-        author.get("profile_image_url"),
-        author.get("account_name") or str(account_id),
-    )
-
+    stored_image_url = upload_profile_image(author.get("profile_image_url"), author.get("account_name") or str(account_id))
     final_img = stored_image_url or author.get("profile_image_url")
     if final_img and is_default_x_avatar(final_img):
         final_img = None
@@ -587,13 +625,14 @@ def upsert_full_sns_account_x(account_id: int, author: Dict[str, Any]) -> None:
         "account_name": author["account_name"],
         "account_url": author["account_url"],
         "caption": author.get("caption"),
-        "profile_image_url": final_img or DEFAULT_PROFILE_IMAGE_URL, 
+        "profile_image_url": final_img or DEFAULT_PROFILE_IMAGE_URL,
         "is_verified": author.get("is_verified"),
         "language": X_TWEET_LANGUAGE,
         "country": "JP" if X_TWEET_LANGUAGE == "ja" else None,
+        "keywords": merged,
+        "last_profile_scraped_at": utcnow_iso(),
     }
     row = {k: v for k, v in row.items() if k in SNS_ACCOUNTS_COLUMNS}
-
     sb_upsert("sns_accounts", [row], on_conflict="id", select="id")
 
 def upsert_posts_and_metrics(account_id: int, tweets_raw: List[Dict[str, Any]]) -> None:
@@ -612,8 +651,6 @@ def upsert_posts_and_metrics(account_id: int, tweets_raw: List[Dict[str, Any]]) 
             "posted_at": t.get("posted_at"),
             "scraped_at": t.get("scraped_at"),
             "media_type": None,
-            "campaign_id": None,
-            "collaboration_id": None,
         }
         row = {k: v for k, v in row.items() if k in POSTS_COLUMNS}
         post_rows.append(row)
@@ -621,56 +658,108 @@ def upsert_posts_and_metrics(account_id: int, tweets_raw: List[Dict[str, Any]]) 
     upserted = sb_upsert("posts", post_rows, on_conflict="external_post_id", select="id,external_post_id")
     post_id_by_ext = {r["external_post_id"]: int(r["id"]) for r in upserted}
 
-    has_metric_date = "metric_date" in POST_METRICS_COLUMNS
-
+    has_captured_at = "captured_at" in POST_METRICS_COLUMNS
+    captured_at = utcnow_iso()
     metric_rows: List[Dict[str, Any]] = []
+
     for t in parsed:
         post_id = post_id_by_ext.get(t["external_post_id"])
         if not post_id:
             continue
 
-        row: Dict[str, Any] = {"post_id": post_id, "created_at": utcnow_iso()}
-        if has_metric_date:
-            row["metric_date"] = today_iso()
-
         m = t["metrics"]
+        views = safe_int(m.get("views"), 0) if m.get("views") is not None else 0
+        likes = safe_int(m.get("likes"), 0) if m.get("likes") is not None else 0
+        comments_count = safe_int(m.get("comments"), 0) if m.get("comments") is not None else 0
+        row: Dict[str, Any] = {"post_id": post_id, "created_at": captured_at}
+        if has_captured_at:
+            row["captured_at"] = captured_at
 
-        if "likes" in POST_METRICS_COLUMNS:
-            row["likes"] = safe_int(m.get("likes"), 0) if m.get("likes") is not None else None
-        if "comments" in POST_METRICS_COLUMNS:
-            row["comments"] = safe_int(m.get("comments"), 0) if m.get("comments") is not None else None
+        # use whichever columns exist
         if "views" in POST_METRICS_COLUMNS:
-            row["views"] = safe_int(m.get("views"), 0) if m.get("views") is not None else None
-        if "retweets" in POST_METRICS_COLUMNS:
-            row["retweets"] = safe_int(m.get("retweets"), 0) if m.get("retweets") is not None else None
-        if "quotes" in POST_METRICS_COLUMNS:
-            row["quotes"] = safe_int(m.get("quotes"), 0) if m.get("quotes") is not None else None
+            row["views"] = views
+        if "likes" in POST_METRICS_COLUMNS:
+            row["likes"] = likes
+        if "comments_count" in POST_METRICS_COLUMNS:
+            row["comments_count"] = comments_count
+        if "duration_seconds" in POST_METRICS_COLUMNS:
+            row["duration_seconds"] = None
+        if "like_view_rate" in POST_METRICS_COLUMNS:
+            row["like_view_rate"] = (likes / views) if views > 0 else 0.0
+        if "comment_view_rate" in POST_METRICS_COLUMNS:
+            row["comment_view_rate"] = (comments_count / views) if views > 0 else 0.0
 
         row = {k: v for k, v in row.items() if k in POST_METRICS_COLUMNS}
         metric_rows.append(row)
 
     if metric_rows:
-        on_conflict = "post_id,metric_date" if has_metric_date else None
-        sb_upsert("post_metrics", metric_rows, on_conflict=on_conflict, select="id")
+        sb_upsert("post_metrics_snapshots", metric_rows, on_conflict=None, select="id")
+
+def mark_posts_scraped(account_id: int) -> None:
+    if "last_posts_scraped_at" not in SNS_ACCOUNTS_COLUMNS:
+        return
+    sb_patch("sns_accounts", {"id": f"eq.{account_id}"}, {"last_posts_scraped_at": utcnow_iso()})
+
+def should_scrape_posts_now(row: Dict[str, Any]) -> bool:
+    last = iso_to_dt(row.get("last_posts_scraped_at"))
+    if not last:
+        return True
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=X_POSTS_REFRESH_HOURS)
+    return last < cutoff
 
 # -----------------------
-# Main
+# DB queries for modes
 # -----------------------
-def main() -> None:
+def db_candidates_for_keyword(keyword: str) -> List[Dict[str, Any]]:
+    if "keywords" not in SNS_ACCOUNTS_COLUMNS:
+        return []
+    return sb_get("sns_accounts", {
+        "select": "id,platform,account_name,account_url,keywords,last_profile_scraped_at,last_posts_scraped_at",
+        "platform": "eq.x",
+        "keywords": f"ilike.*{keyword}*",
+        "limit": str(MAX_DB_CANDIDATES_FETCH),
+        "order": "id.desc",
+    })
+
+def keyword_pool_is_stale(rows: List[Dict[str, Any]]) -> bool:
+    if not rows:
+        return True
+    cutoff = datetime.now(timezone.utc) - timedelta(days=DISCOVERY_STALE_DAYS)
+    for r in rows:
+        dt = iso_to_dt(r.get("last_profile_scraped_at"))
+        if dt and dt >= cutoff:
+            return False
+    return True
+
+def db_x_accounts_for_monitoring(limit: int) -> List[Dict[str, Any]]:
+    return sb_get("sns_accounts", {
+        "select": "id,platform,account_name,account_url,last_posts_scraped_at",
+        "platform": "eq.x",
+        "limit": str(limit),
+        "order": "id.desc",
+    })
+
+# -----------------------
+# Modes
+# -----------------------
+def run_discovery() -> None:
     keywords = pick_keywords_for_run(KEYWORD_POOL, X_KEYWORDS_PER_RUN)
-    print("X KEYWORDS:", keywords)
-    print("X settings:", {
+    print("MODE=discovery | keywords:", keywords)
+    print("Discovery settings:", {
+        "keywordsPerRun": X_KEYWORDS_PER_RUN,
         "maxItems": X_MAX_ITEMS,
-        "tweetLanguage": X_TWEET_LANGUAGE,
         "sort": X_SORT,
+        "lang": X_TWEET_LANGUAGE,
         "minFollowers": MIN_FOLLOWERS,
-        "maxTweetsPerAuthor": X_MAX_TWEETS_PER_AUTHOR,
-        "jpStrict": JP_STRICT,
-        "influencerStrict": INFLUENCER_STRICT,
     })
 
     for kw in keywords:
-        print(f"\n=== keyword: {kw} ===")
+        candidates = db_candidates_for_keyword(kw)
+        need = (len(candidates) < MIN_DB_CANDIDATES_PER_KEYWORD) or keyword_pool_is_stale(candidates)
+        print(f"\n=== keyword: {kw} === | DB candidates={len(candidates)} | need_discovery={need}")
+        if not need:
+            continue
+
         items = apify_run({
             "searchTerms": [f"{kw} lang:{X_TWEET_LANGUAGE}"],
             "maxItems": X_MAX_ITEMS,
@@ -681,49 +770,99 @@ def main() -> None:
         print("Tweets returned:", len(items))
 
         authors: Dict[str, Dict[str, Any]] = {}
-        tweets_by_author: Dict[str, List[Dict[str, Any]]] = {}
-
         for it in items:
             a = parse_author(it)
             if not a:
                 continue
-
             if safe_int(a.get("followers"), 0) < MIN_FOLLOWERS:
                 continue
-
             if not influencer_filter(a):
                 continue
-
-            uname = a["account_name"]
-            authors[uname] = a
-
-            lst = tweets_by_author.setdefault(uname, [])
-            if len(lst) < X_MAX_TWEETS_PER_AUTHOR:
-                lst.append(it)
+            authors[a["account_name"]] = a
 
         print("Qualified influencers:", len(authors))
 
         for uname, a in authors.items():
-            account_id = ensure_minimal_account_row(
-                uname,
-                safe_int(a.get("followers"), 0),
-                a.get("profile_image_url"),)
+            account_id = ensure_minimal_account_row(uname, safe_int(a.get("followers"), 0), a.get("profile_image_url"), kw)
             if not account_id:
                 continue
+            upsert_full_sns_account_x(account_id, a, kw)
+            upsert_accounts_metrics(
+                account_id,
+                safe_int(a.get("followers"), 0),
+                safe_int(a.get("following"), 0),
+                safe_int(a.get("posts"), 0),
+                safe_int(a.get("maximum_likes"), 0),
+            )
+            time.sleep(0.1)
 
-            # Debug:
-            print("AVATAR_URL", uname, a.get("profile_image_url"))
+    print("\nDiscovery done.")
 
-            upsert_full_sns_account_x(account_id, a)
-            upsert_accounts_metrics(account_id, safe_int(a.get("followers"), 0), safe_int(a.get("following"), 0), safe_int(a.get("mediaCount"), 0))
-            upsert_posts_and_metrics(account_id, tweets_by_author.get(uname, []))
+def run_monitoring() -> None:
+    print("MODE=monitoring")
+    print("Monitoring settings:", {
+        "maxInfluencersPerRun": X_MAX_INFLUENCERS_PER_RUN,
+        "tweetsPerInfluencer": X_TWEETS_PER_INFLUENCER,
+        "postsRefreshHours": X_POSTS_REFRESH_HOURS,
+    })
 
-            if is_trending_db_only(account_id):
-                print("TRENDING:", uname, "followers=", safe_int(a.get("followers"), 0))
+    rows = db_x_accounts_for_monitoring(limit=800)
 
-            time.sleep(0.2)
+    due: List[Dict[str, Any]] = []
+    for r in rows:
+        if not r.get("account_name"):
+            continue
+        if not should_scrape_posts_now(r):
+            continue
+        account_id = int(r["id"])
+        if not is_trending_db_only(account_id):
+            continue
+        due.append(r)
 
-    print("\nDone.")
+    due = due[:X_MAX_INFLUENCERS_PER_RUN]
+    print("Trending & due accounts:", len(due))
+
+    for acc in due:
+        account_id = int(acc["id"])
+        uname = str(acc["account_name"]).lstrip("@")
+        print(f"Scraping tweets for @{uname} (id={account_id})")
+
+        items = apify_run({
+            "twitterHandles": [uname],
+            "maxItems": X_TWEETS_PER_INFLUENCER,
+            "sort": "Latest",
+        })
+        print("  tweets:", len(items))
+
+        # refresh profile + metrics opportunistically from tweet author data
+        if items:
+            a = parse_author(items[0])
+            if a:
+                upsert_full_sns_account_x(account_id, a, keyword="")
+                upsert_accounts_metrics(
+                    account_id,
+                    safe_int(a.get("followers"), 0),
+                    safe_int(a.get("following"), 0),
+                    safe_int(a.get("posts"), 0),
+                    safe_int(a.get("maximum_likes"), 0),
+                )
+
+        upsert_posts_and_metrics(account_id, items)
+        mark_posts_scraped(account_id)
+        time.sleep(0.2)
+
+    print("\nMonitoring done.")
+
+# -----------------------
+# Main
+# -----------------------
+def main() -> None:
+    if MODE == "discovery":
+        run_discovery()
+    elif MODE == "monitoring":
+        run_monitoring()
+    else:
+        raise RuntimeError("MODE must be 'discovery' or 'monitoring'")
 
 if __name__ == "__main__":
     main()

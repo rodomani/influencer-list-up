@@ -180,21 +180,15 @@ export default Deno.serve(async () => {
       if (postErr) throw new Error(`posts upsert failed (${item.id}): ${postErr.message}`)
       const postId = postRow.id as number
 
-      const { error: pmErr } = await supabase.from("post_metrics").insert({
+      const { error: pmErr } = await supabase.from("post_metrics_snapshots").insert({
         post_id: postId,
-        likes,
-        comments,
         views: item.viewsLike ?? null,
-
-        // not provided by IG for your schema -> keep null
-        reposts: null,
-        bookmarks: null,
-        "re-tweets": null,
-        citations: null,
-        video_length: null,
-        saves: null,
-        shares: null,
-
+        likes,
+        comments_count: comments,
+        duration_seconds: null,
+        like_view_rate: item.viewsLike && item.viewsLike > 0 ? likes / item.viewsLike : 0,
+        comment_view_rate: item.viewsLike && item.viewsLike > 0 ? comments / item.viewsLike : 0,
+        captured_at: nowIso,
         created_at: nowIso,
       } as any)
 
