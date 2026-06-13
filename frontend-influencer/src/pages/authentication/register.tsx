@@ -68,13 +68,15 @@ export function RegisterPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-muted/50 px-4">
-      <Card className="w-full max-w-xl">
+    <div className="art-shell flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground">
+      <Card className="deco-motion w-full max-w-3xl">
         <CardHeader>
-          <CardTitle className="text-2xl">新規登録</CardTitle>
-          <CardDescription>まずはアカウントを作ろう。</CardDescription>
+          <div className="deco-kicker">新規アクセス</div>
+          <CardTitle className="mt-3 text-3xl">新規登録</CardTitle>
+          <CardDescription>ブランド、役割、言語設定まで一度で整えます。</CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="deco-rule mb-6" />
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div className="space-y-2">
@@ -167,17 +169,17 @@ export function RegisterPage() {
             </div>
 
             {error && (
-              <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">
+              <p className="border border-red-400/50 bg-red-950/30 p-3 text-sm text-red-200">
                 {error}
               </p>
             )}
             {success && (
-              <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-md p-3">
+              <p className="border border-emerald-400/50 bg-emerald-950/30 p-3 text-sm text-emerald-100">
                 {success}
               </p>
             )}
 
-            <div className="flex gap-3">
+            <div className="deco-action-row">
               <Button type="submit" disabled={loading} className="flex-1">
                 {loading ? "作成中..." : "アカウント作成"}
               </Button>

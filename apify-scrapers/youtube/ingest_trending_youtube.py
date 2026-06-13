@@ -753,7 +753,7 @@ def upsert_posts_and_metrics(account_id: int, items_raw: List[Dict[str, Any]]) -
 
     # Insert snapshots (time-series): do NOT upsert unless you enforce a unique constraint
     if snapshot_rows:
-        sb_upsert("post_metric_snapshots", snapshot_rows, on_conflict=None, select="id")
+        sb_upsert("post_metrics_snapshots", snapshot_rows, on_conflict=None, select="id")
 
 def mark_posts_scraped(account_id: int) -> None:
     sb_patch("sns_accounts", {"id": f"eq.{account_id}"}, {"last_posts_scraped_at": utcnow_iso()})

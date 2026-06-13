@@ -1,538 +1,415 @@
-# データベーススキーマ
+# Database Schema
 
-## 概要
+This document describes the current influencer analytics data model used by the frontend, Supabase Edge Functions, and Python scraper jobs. It is a practical table map, not a full generated DDL dump.
 
-このドキュメントは、Community Dashboardアプリケーションのデータベーススキーマを記述します。
-このスキーマは、コミュニティのイベント、フォーム、ユーザー、および関連する活動を管理するために設計されています。
-
-## スキーマ図
+## Core Relationship Map
 
 ```mermaid
 erDiagram
-    organizations {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        text name
-    }
-
-    user_types {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        text type UK
-    }
-
-    users {
-        uuid id PK "FK to auth.users"
-        timestamp created_at
-        timestamp updated_at
-        text name
-        text email
-        text icon_storage_path
-    }
-
-    user_groups {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        text name UK
-    }
-
-    organization_user {
-        bigint id PK
-        timestamp created_at
-        bigint organization_id FK
-        uuid user_id FK
-    }
-
-    user_user_type {
-        bigint id PK
-        timestamp created_at
-        uuid user_id FK
-        bigint user_type_id FK
-    }
-
-    user_user_group {
-        bigint id PK
-        timestamp created_at
-        bigint user_group_id FK
-        uuid user_id FK
-    }
-
-    venues {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        text name
-        text address
-        integer capacity
-    }
-
-    event_types {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        text type UK
-    }
-
-    events {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        text title
-        text description
-        timestamp starts_at
-        timestamp ends_at
-        bigint venue_id FK
-        text online_url
-        bigint event_type_id FK
-        boolean is_private "default: true"
-        text thumbnail_storage_path
-    }
-
-    event_participant_group {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        bigint event_id FK
-        bigint user_group_id FK
-        text requirement "default: required"
-    }
-
-    event_attendances {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        text status
-        uuid user_id FK
-        bigint event_id FK
-    }
-
-    tasks {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        bigint event_id FK
-        text title
-        text description
-        text progress_status "default: todo"
-        text priority "default: normal"
-        timestamp due_at
-        timestamp completed_at
-    }
-
-    task_assignee {
-        bigint id PK
-        timestamp created_at
-        bigint task_id FK
-        uuid assignee_user_id FK
-    }
-
-    event_program_items {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        bigint event_id FK
-        text title
-        timestamp starts_at
-        timestamp ends_at
-        bigint venue_id FK
-    }
-
-    guest_types {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        text type UK
-    }
-
-    guests {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        uuid user_id FK
-        text name
-        bigint organization_id FK
-        text title
-        text email
-        text phone_number
-    }
-
-    event_guest {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        bigint event_id FK
-        bigint guest_id FK
-        bigint guest_type_id FK
-    }
-
-    official_projects {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        text name_ja
-        text name_en
-        uuid leader_user_id FK
-        text thumbnail_path
-    }
-
-    official_article_groups {
-        bigint id PK
-        timestamp created_at
-        text name
-        text thumbnail_storage_path
-    }
-
-    official_articles {
-        bigint id PK
-        timestamp created_at
-        timestamp published_at
-        text title
-        text lifecycle_status
-        text markdown_storage_path
-        bigint official_article_group_id FK
-    }
-
-    form_question_formats {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        text format UK
-        text value_type
-        boolean has_options "default: false"
-    }
-
-    forms {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        text name
-        text description
-        text form_url
-        text source
-        text lifecycle_status "default: draft"
-        bigint event_id FK
-        bigint official_project_id FK
-    }
-
-    form_questions {
-        bigint id PK
-        bigint form_id FK
-        timestamp created_at
-        timestamp updated_at
-        text label
-        bigint form_question_format_id FK
-        integer position
-    }
-
-    form_question_options {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        text option
-        smallint sort_order
-        bigint form_question_id FK
-    }
-
-    form_rating_settings {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        bigint form_question_id FK
-        smallint step_count
-        text low_label
-        text high_label
-    }
-
-    form_respondent_group {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        bigint form_id FK
-        bigint user_group_id FK
-        text requirement "default: required"
-    }
-
-    form_responses {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        bigint form_id FK
-        uuid user_id FK
-        timestamp submitted_at
-        text response_key
-    }
-
-    form_response_answers {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        bigint form_question_id FK
-        bigint form_response_id FK
-        text answer_text
-        numeric answer_number
-        timestamp answer_timestamp
-        boolean answer_bool
-        jsonb answer_json
-    }
-
-    form_import_files {
-        bigint id PK
-        timestamp created_at
-        bigint form_id FK
-        text file_path
-    }
-
-    assignments {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        bigint event_id FK
-        text title
-        text description
-        text instructions_text
-        text instructions_storage_path
-        text lifecycle_status "default: draft"
-        timestamp opens_at
-        timestamp due_at
-        text instructions_type
-        text assignment_type
-        text assignment_template_text
-        text assignment_template_storage_path
-        bigint form_id FK
-    }
-
-    assignment_required_user_group {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        bigint assignment_id FK
-        bigint user_group_id FK
-        text requirement "default: required"
-    }
-
-    assignment_submissions {
-        bigint id PK
-        timestamp created_at
-        timestamp submitted_at
-        bigint assignment_id FK
-        uuid user_id FK
-        text content_text
-        text content_storage_path
-    }
-
-    inquiries {
-        bigint id PK
-        timestamp created_at
-        timestamp updated_at
-        uuid requester_user_id FK
-        bigint event_id FK
-        uuid assignee_user_id FK
-        text subject
-        text body
-        text inquiry_status "default: open"
-    }
-
-    %% コアエンティティのリレーション
-    organizations ||--o{ organization_user : "含む"
-    organizations ||--o{ guests : "所属"
-    user_types ||--o{ user_user_type : "分類"
-    users ||--o{ organization_user : "所属"
-    users ||--o{ user_user_type : "持つ"
-    users ||--o{ user_user_group : "所属"
-    users ||--o{ official_projects : "リーダー"
-    users ||--o{ form_responses : "回答者"
-    users ||--o{ inquiries : "依頼者"
-    users ||--o{ inquiries : "担当者"
-    users ||--o{ task_assignee : "担当者"
-    users ||--o{ guests : "リンク"
-    user_groups ||--o{ user_user_group : "含む"
-    user_groups ||--o{ event_participant_group : "参加"
-    user_groups ||--o{ form_respondent_group : "回答"
-    user_groups ||--o{ assignment_required_user_group : "課題対象"
-
-    %% イベント関連のリレーション
-    event_types ||--o{ events : "分類"
-    venues ||--o{ events : "会場"
-    venues ||--o{ event_program_items : "会場"
-    events ||--o{ event_participant_group : "対象"
-    events ||--o{ event_attendances : "出欠"
-    events ||--o{ tasks : "タスク"
-    events ||--o{ event_program_items : "プログラム"
-    events ||--o{ event_guest : "ゲスト"
-    events ||--o{ forms : "関連フォーム"
-    events ||--o{ inquiries : "関連問い合わせ"
-    users ||--o{ event_attendances : "出欠"
-    tasks ||--o{ task_assignee : "割り当て"
-    guests ||--o{ event_guest : "参加"
-    guest_types ||--o{ event_guest : "種別"
-
-    %% フォーム関連のリレーション
-    forms ||--o{ form_questions : "質問"
-    forms ||--o{ form_responses : "回答"
-    forms ||--o{ form_respondent_group : "対象グループ"
-    forms ||--o{ form_import_files : "インポートファイル"
-    form_question_formats ||--o{ form_questions : "質問形式"
-    form_questions ||--o{ form_question_options : "選択肢"
-    form_questions ||--o{ form_rating_settings : "評価設定"
-    form_questions ||--o{ form_response_answers : "回答"
-    form_responses ||--o{ form_response_answers : "含む"
-    official_projects ||--o{ forms : "管理"
-
-    %% 課題関連のリレーション
-    events ||--o{ assignments : "課題"
-    forms ||--o{ assignments : "関連フォーム"
-    assignments ||--o{ assignment_required_user_group : "対象グループ"
-    assignments ||--o{ assignment_submissions : "提出"
-    users ||--o{ assignment_submissions : "提出者"
-
-    %% 記事関連のリレーション
-    official_article_groups ||--o{ official_articles : "含む"
+  users ||--o{ campaigns : owns
+  sns_accounts ||--o{ accounts_metrics : has
+  sns_accounts ||--o{ posts : publishes
+  posts ||--o{ post_metrics_snapshots : has
+  posts ||--o{ post_comments_raw : receives
+  posts ||--o{ post_comment_evidence : has
+  posts ||--o{ post_comment_analysis : has
+  posts ||--o{ post_commenter_quality_analysis : has
+  posts ||--o{ post_sponsorship_analysis : has
+  posts ||--o{ post_hashtag : tagged
+  hashtags ||--o{ post_hashtag : joins
+  sns_accounts ||--o{ influencer_average_comment_analysis : summarizes
+  sns_accounts ||--o{ influencer_commenter_quality_summary : summarizes
+  sns_accounts ||--o{ influencer_growth_anomaly_summary : summarizes
+  sns_accounts ||--o{ account_growth_anomaly_events : has
+  sns_accounts ||--o{ influencer_performance_summary : summarizes
+  sns_accounts ||--o{ analysis_job_runs : tracked_by
 ```
 
-## テーブルグループ
+## User and Campaign Tables
 
-### コアエンティティ
+### `users`
 
-#### organizations (組織)
-ユーザーやスピーカーが所属する組織を表します。
+Profile table for Supabase-authenticated users.
 
-#### users (ユーザー)
-認証ユーザーにリンクされた、コアとなるユーザー情報です。
+Common fields used by the code:
 
-#### user_types (ユーザー種別)
-利用可能なユーザー種別を定義します。
+- `id`: UUID matching Supabase Auth user id.
+- `email`: user email.
+- `name`, `company`, `role`, `timezone`, `language`: profile metadata from registration/profile upsert.
+- `email_verified`: mirrored from Supabase Auth email confirmation.
+- `created_at`, `updated_at`: timestamps when available.
 
-#### user_groups (ユーザーグループ)
-ユーザーが所属できるグループです。
+Used by:
 
-#### organization_user (組織ユーザー)
-ユーザーと組織をリンクする中間テーブルです。
+- `frontend-influencer/src/contexts/AuthContext.tsx`
+- `supabase/functions/profile-upsert`
+- `supabase/functions/auth-email-verified`
 
-#### user_user_type (ユーザーユーザー種別)
-ユーザーとユーザー種別をリンクする中間テーブルです。
+### `campaigns`
 
-#### user_user_group (ユーザーユーザーグループ)
-ユーザーとユーザーグループをリンクする中間テーブルです。
+Campaign records owned by users.
 
-### イベント管理
+Common fields used by the code:
 
-#### events (イベント)
-イベントのメイン情報を格納します。
+- `id`
+- `user_id`
+- `name`
+- `description`
+- `start_date`
+- `end_date`
+- `budget`
+- `goal`
+- `status`
+- `influencers`: text list currently appended from search results.
+- `created_at`
 
-#### event_types (イベント種別)
-イベントのカテゴリを定義します。
+Used by:
 
-#### event_participant_group (イベント参加グループ)
-どのユーザーグループがイベントに参加すべきかを定義する中間テーブルです。
+- campaign list/create/edit/detail pages
+- `supabase/functions/campaign-create`
+- `supabase/functions/campaign-list`
+- search result add-to-campaign workflow
 
-#### event_attendances (イベント出欠)
-ユーザーのイベントへの出欠状況を管理します。statusフィールドで出席・欠席・未定等の状態を保持します。
+## Influencer Account Tables
 
-#### tasks (タスク)
-イベントに関連するタスクを管理します。
+### `sns_accounts`
 
-#### task_assignee (タスク担当者)
-タスクにユーザーを割り当てる中間テーブルです。
+Primary influencer account table.
 
-#### event_program_items (イベントプログラム項目)
-イベントのプログラム/スケジュールの個別項目です。
+Common fields used by the code:
 
-### ゲスト管理
+- `id`
+- `platform`: `instagram`, `tiktok`, `youtube`, or `x`.
+- `platform_user_id`: external platform identifier when available.
+- `profile_id`: source profile identifier for connected Instagram sync flows.
+- `account_name`
+- `account_url`
+- `caption`
+- `profile_image_url`
+- `country`
+- `email`
+- `language`
+- `gender`
+- `does_livestream`
+- `keywords`: comma-separated keyword text.
+- `is_verified`
+- `bookmarks`: array of user ids that bookmarked the account.
+- `last_profile_scraped_at`
+- `last_posts_scraped_at`
 
-#### guest_types (ゲスト種別)
-ゲストの種別を定義します（講師、見学者等）。
+Important uniqueness patterns:
 
-#### guests (ゲスト)
-イベントゲストの情報を格納します。内部ユーザーまたは外部の方がゲストになれます。
+- Many ingesters upsert by `platform, platform_user_id`.
+- Some platform flows upsert by `platform, account_name`.
 
-#### event_guest (イベントゲスト)
-ゲストとイベントをリンクする中間テーブルです。ゲスト種別も指定します。
+### `accounts_metrics`
 
-### 会場管理
+Time-series account metrics.
 
-#### venues (会場)
-イベントの物理的または仮想的な会場情報です。
+Common fields:
 
-### フォーム管理
+- `id`
+- `account_id`
+- `metric_date`
+- `followers`
+- `posts`
+- `maximum_likes`
+- `videos`
 
-#### forms (フォーム)
-情報収集のためのフォームです。lifecycle_statusでフォームの状態（draft：下書き、open：公開中、closed：終了）を管理します。
+Important uniqueness pattern:
 
-#### form_questions (フォーム質問)
-フォーム内の質問項目です。
+- `account_id, metric_date`
 
-#### form_question_formats (質問形式)
-利用可能な質問形式を定義します。value_typeで値の型、has_optionsで選択肢の有無を指定します。
+Used by frontend search/detail views and growth/performance analysis.
 
-定義済みの質問形式:
-- id: 1, format: `internal_text` - 自由記述（テキストエリア）
-- id: 2, format: `internal_single_select` - 単一選択（ラジオボタン、選択肢が必要）
-- id: 3, format: `internal_multi_select` - 複数選択（チェックボックス、選択肢が必要）
-- id: 4, format: `internal_rating` - 五段階評価（1-5の評価）
+## Post and Hashtag Tables
 
-#### form_question_options (質問選択肢)
-選択式質問の選択肢を格納します。
+### `posts`
 
-#### form_rating_settings (評価設定)
-評価形式の質問（internal_rating）の設定を格納します。step_countで評価段階数（例: 5段階評価なら5）、low_labelで最低評価のラベル、high_labelで最高評価のラベルを設定します。
+Platform posts for an influencer account.
 
-#### form_respondent_group (フォーム回答対象グループ)
-どのグループがフォームに回答すべきかを定義する中間テーブルです。
+Common fields:
 
-#### form_responses (フォーム回答)
-個別のフォーム提出を表します。
+- `id`
+- `account_id`
+- `external_post_id`
+- `link`
+- `caption`
+- `posted_at`
+- `scraped_at`
 
-#### form_response_answers (フォーム回答詳細)
-フォーム回答内の個別の回答を格納します。
+Important uniqueness pattern:
 
-#### form_import_files (フォームインポートファイル)
-フォームデータ用にインポートされたファイルです。
+- `external_post_id`
 
-### 課題管理
+### `post_metrics_snapshots`
 
-#### assignments (課題)
-イベントに関連する課題を管理します。lifecycle_statusで課題の状態（draft：下書き、open：公開中、closed：終了）を管理します。instructions_typeで指示の種類、assignment_typeで提出物の種類を指定できます。form_idでフォームと連携することも可能です。
+Time-series post metrics captured during post ingestion.
 
-定義済みの提出物タイプ (assignment_type):
-- `text` - テキスト形式の提出物（assignment_submissions.content_textに保存）
-- `markdown` - マークダウン形式の提出物（assignment_submissions.content_storage_pathに保存）
-- `file` - ファイル形式の提出物（assignment_submissions.content_storage_pathに保存）
+Common fields:
 
-#### assignment_required_user_group (課題対象グループ)
-どのユーザーグループが課題に取り組むべきかを定義する中間テーブルです。requirementフィールドで必須度を指定します（デフォルト: required）。
+- `id`
+- `post_id`
+- `account_id`
+- `snapshot_at` or equivalent capture timestamp
+- platform-specific engagement counters such as likes, comments, views, shares, or plays.
 
-#### assignment_submissions (課題提出)
-ユーザーの課題提出を格納します。content_textでテキスト形式の提出内容、content_storage_pathでファイル形式の提出内容を管理します。
+Snapshots are inserted as time-series rows. They are not treated as a single upserted current-state row.
 
-### プロジェクト管理
+### `hashtags`
 
-#### official_projects (公式プロジェクト)
-コミュニティの公式プロジェクトを管理します。
+Canonical hashtag table.
 
-#### official_article_groups (公式記事グループ)
-公式記事をグループ化するためのカテゴリを管理します。記事をテーマやトピック別に整理できます。
+Common fields:
 
-#### official_articles (公式記事)
-コミュニティの公式記事を管理します。lifecycle_statusで記事の状態（draft：下書き、published：公開中、unpublished：非公開）を管理します。published_atで公開日時を設定でき、未来の日時を指定することで予約公開が可能です。マークダウン形式の記事をストレージに保存します。
+- `id`
+- `tag`
+- `language`
 
-### 問い合わせ管理
+Important uniqueness pattern:
 
-#### inquiries (問い合わせ)
-サポート問い合わせやリクエストを管理します。
+- `tag`
 
-## インデックスとパフォーマンスの考慮事項
+### `post_hashtag`
 
-インデックスを検討すべき主要な箇所：
-- JOIN パフォーマンスのための外部キー列
-- グループ別ユーザー検索のための `user_user_group`
-- 組織別ユーザー検索のための `organization_user`
-- ユーザー種別検索のための `user_user_type`
-- フィルタリングのための `tasks.progress_status`
-- 時系列クエリのための `form_responses.submitted_at`
-- 未対応問い合わせフィルタリングのための `inquiries.inquiry_status`
-- イベント別ゲスト検索のための `event_guest.event_id`
-- プライベートイベントフィルタリングのための `events.is_private`
-- 課題別対象グループ検索のための `assignment_required_user_group.assignment_id`
+Join table between posts and hashtags.
+
+Important uniqueness pattern:
+
+- `post_id, hashtag_id`
+
+## Comment Analysis Tables
+
+### `post_comments_raw`
+
+Raw or filtered raw comments collected for a post.
+
+Common fields include:
+
+- `post_id`
+- commenter identity fields when available
+- comment text
+- timestamps and platform metadata when available
+
+### `post_comment_evidence`
+
+Evidence rows sampled during comment analysis for traceability/debugging.
+
+### `post_comment_analysis`
+
+Per-post aggregate comment analysis.
+
+Common fields used by aggregators:
+
+- `post_id`
+- sentiment, toxicity, hate, spam, conversion-intent, emotion, language, and topic outputs
+- sampled and filtered counts
+- `analysis_version`
+- `updated_at`
+
+### `influencer_average_comment_analysis`
+
+Account-level aggregate of post comment analysis.
+
+Common fields used by the frontend:
+
+- `account_id`
+- `window`, usually `all_posts`
+- `posts_count`
+- `avg_sentiment`
+- `avg_toxicity`
+- `avg_hate_score`
+- `avg_conversion_intent_rate`
+- `avg_spam_rate`
+- `sum_sampled_total`
+- `sum_filtered_total`
+- `avg_emotion`
+- `avg_language`
+- `avg_topics`
+- `updated_at`
+
+Important uniqueness pattern:
+
+- `account_id, window`
+
+## Newer Analysis Tables
+
+### `post_commenter_quality_analysis`
+
+Per-post commenter quality analysis.
+
+Important uniqueness pattern:
+
+- `post_id, analysis_version`
+
+Written by:
+
+- `apify-scrapers/post_commenter_quality_analyze.py`
+
+### `influencer_commenter_quality_summary`
+
+Account-level commenter quality summary.
+
+Fields created by the current migration:
+
+- `id`
+- `account_id`
+- `platform`
+- `window_label`
+- `avg_unique_commenters`
+- `avg_comments_per_commenter`
+- `avg_repeat_commenter_rate`
+- `avg_substantive_comment_rate`
+- `avg_question_rate`
+- `avg_low_signal_comment_rate`
+- `avg_suspicious_commenter_rate`
+- `posts_used`
+- `analysis_version`
+- `created_at`
+- `updated_at`
+
+Important uniqueness pattern:
+
+- `account_id, window_label, analysis_version`
+
+### `post_sponsorship_analysis`
+
+Per-post sponsorship detection.
+
+Important uniqueness pattern:
+
+- `post_id, analysis_version`
+
+Written by:
+
+- `apify-scrapers/post_sponsorship_analyze.py`
+
+### `account_growth_anomaly_events`
+
+Event-level growth anomaly records for account metric history.
+
+Important uniqueness pattern:
+
+- `account_id, metric_date, analysis_version`
+
+### `influencer_growth_anomaly_summary`
+
+Account-level growth anomaly summary.
+
+Important fields:
+
+- `account_id`
+- `platform`
+- `window_label`
+- `growth_anomaly_score`
+- `analysis_status`
+- `latest_metric_date`
+- `analysis_version`
+- `updated_at`
+
+Allowed `analysis_status` values:
+
+- `ok`
+- `no_metrics`
+- `stale_source_data`
+- `insufficient_history`
+
+Important uniqueness pattern:
+
+- `account_id, window_label, analysis_version`
+
+### `influencer_performance_summary`
+
+Account-level performance summary.
+
+Important fields:
+
+- `account_id`
+- `platform`
+- `window`
+- `engagement_trend_score`
+- `posts_used`
+- `updated_at`
+
+Important uniqueness pattern:
+
+- `account_id, window`
+
+Note: `window` is a PostgreSQL keyword, so migration SQL must quote it as `"window"` when used in DDL.
+
+## Job Tracking and Schema Validation
+
+### `analysis_job_runs`
+
+Step-level run log for `bookmarked_weekly_refresh.py`.
+
+Fields:
+
+- `id`
+- `analysis_name`
+- `account_id`
+- `platform`
+- `status`
+- `rows_written`
+- `error_message`
+- `details`
+- `analysis_version`
+- `started_at`
+- `finished_at`
+- `created_at`
+
+Common `analysis_name` values:
+
+- `refresh_posts`
+- `post_comment_analysis`
+- `post_sponsorship`
+- `commenter_quality`
+- `commenter_quality_summary`
+- `account_comment_average`
+- `growth_anomaly`
+- `performance_summary`
+
+Common statuses:
+
+- `success`
+- `skipped`
+- `partial`
+- `failed`
+- growth-specific non-crash statuses such as `stale_source_data`.
+
+### `analysis_unique_indexes`
+
+View over unique indexes in the public schema. The scraper pipeline uses it to verify required uniqueness before doing idempotent upserts.
+
+Current exposed columns:
+
+- `schemaname`
+- `tablename`
+- `indexname`
+- `indexdef`
+
+The Python validation code accepts both `tablename/indexname` and `table_name/index_name`, but the migration keeps the existing `tablename/indexname` names to avoid PostgreSQL view column rename errors.
+
+## Migration Files
+
+Current migration files:
+
+- `supabase/migrations/20260412_analysis_status_and_job_runs.sql`
+- `supabase/migrations/20260413_commenter_summary_and_index_validation.sql`
+
+Apply them with:
+
+```bash
+supabase db push
+```
+
+Then run a backend smoke refresh:
+
+```bash
+BOOKMARK_PLATFORMS=instagram \
+BOOKMARK_ANALYSIS_REFRESH_HOURS=0 \
+BOOKMARK_MAX_ACCOUNTS_PER_RUN=1 \
+BOOKMARK_ANALYZE_POSTS_PER_ACCOUNT=3 \
+BOOKMARK_SLEEP_SECONDS=0 \
+.venv/bin/python apify-scrapers/bookmarked_weekly_refresh.py
+```

@@ -12,10 +12,11 @@ export function VerificationPage() {
   }, [location.search])
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-muted/50 px-4">
-      <Card className="w-full max-w-lg">
-        <CardHeader>
-          <CardTitle className="text-2xl">メールを確認してね</CardTitle>
+    <div className="art-shell flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground">
+      <Card className="deco-motion w-full max-w-lg">
+        <CardHeader className="text-center">
+          <div className="deco-kicker">メール確認</div>
+          <CardTitle className="mt-3 text-3xl">メールを確認してね</CardTitle>
           <CardDescription>
             {email
               ? `${email} に確認リンクを送ったよ。`
@@ -24,10 +25,11 @@ export function VerificationPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
+          <div className="deco-rule" />
+          <p className="deco-copy text-center text-sm">
             確認できたら戻ってログインしてね。
           </p>
-          <div className="flex gap-3">
+          <div className="deco-action-row">
             <Button className="flex-1" onClick={() => navigate("/login")}>
               ログインへ
             </Button>

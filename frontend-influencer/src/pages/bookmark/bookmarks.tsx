@@ -1,282 +1,187 @@
-import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
-import star from "@/assets/star.jpeg";
-import starToggle from "@/assets/star-2.jpeg";
-import { supabase } from "@/lib/supabase";
-
-type MetricsRow = {
-  maximum_likes: number | null;
-  posts: number | null;
-  followers: number | null;
-  metric_date?: string | null;
-};
-
-type InfluencerRowFromDB = {
-  id: number;
-  platform: string;
-  account_name: string;
-  gender: string | null;
-  keywords: string | null;
-  profile_image_url: string | null;
-  accounts_metrics?: MetricsRow[] | null;
-  last_profile_scraped_at: string | null;
-  bookmarks: string[] | null;
-};
-
-type InfluencerNormalized = {
-  id: number;
-  platform: string;
-  account_name: string;
-  profile_image_url?: string | null;
-  gender: string | null;
-  keywords: string | null;
-  accounts_metrics: MetricsRow | null;
-  last_profile_scraped_at: string | null;
-  bookmarks: string[];
-};
+import { useBookmarks } from "@/features/bookmarks/api/useBookmarks";
+import { BookmarkFoldersPanel } from "@/features/bookmarks/components/BookmarkFoldersPanel";
+import { BookmarkMemoStatus } from "@/features/bookmarks/components/BookmarkMemoStatus";
+import { BookmarkPriorityPanel } from "@/features/bookmarks/components/BookmarkPriorityPanel";
+import { BookmarkReadinessPanel } from "@/features/bookmarks/components/BookmarkReadinessPanel";
+import { BookmarkReadinessStatus } from "@/features/bookmarks/components/BookmarkReadinessStatus";
+import { BookmarkRiskPanel } from "@/features/bookmarks/components/BookmarkRiskPanel";
+import { BookmarkRiskStatus } from "@/features/bookmarks/components/BookmarkRiskStatus";
+import { BookmarkRatingPanel } from "@/features/bookmarks/components/BookmarkRatingPanel";
+import { BookmarkRatingStatus } from "@/features/bookmarks/components/BookmarkRatingStatus";
+import { BookmarkSourceStatus } from "@/features/bookmarks/components/BookmarkSourceStatus";
+import { BookmarkTagsPanel } from "@/features/bookmarks/components/BookmarkTagsPanel";
+import { BookmarkWatchlistAlertsPanel } from "@/features/bookmarks/components/BookmarkWatchlistAlertsPanel";
+import { BookmarksFolderEmptyState } from "@/features/bookmarks/components/BookmarksFolderEmptyState";
+import { BookmarksGrid } from "@/features/bookmarks/components/BookmarksGrid";
+import { BookmarksHero } from "@/features/bookmarks/components/BookmarksHero";
+import { BookmarksStatus } from "@/features/bookmarks/components/BookmarksStatus";
+import { BookmarksSummary } from "@/features/bookmarks/components/BookmarksSummary";
 
 export function Bookmarks() {
   const navigate = useNavigate();
   const { user } = useAuth();
-
-  const [influencers, setInfluencers] = useState<InfluencerNormalized[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const formatDateYmd = (value: string | null) => {
-    if (!value) return "N/A";
-    const iso = value.includes("T") ? value : value.replace(" ", "T");
-    const date = new Date(iso);
-    if (Number.isNaN(date.getTime())) return "N/A";
-    const ymd = new Intl.DateTimeFormat("en-CA", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(date);
-    return ymd.replace(/-/g, "/");
-  };
-
-  useEffect(() => {
-    const fetchBookmarked = async () => {
-      if (!user) {
-        setLoading(false);
-        return;
-      }
-
-      setLoading(true);
-      setError(null);
-
-      const { data, error } = await supabase
-        .from("sns_accounts")
-        .select(
-          `
-          id,
-          platform,
-          account_name,
-          gender,
-          keywords,
-          profile_image_url,
-          last_profile_scraped_at,
-          bookmarks,
-          accounts_metrics(maximum_likes, posts, followers, metric_date)
-        `
-        )
-        .contains("bookmarks", [user.id])
-        .order("metric_date", {
-          foreignTable: "accounts_metrics",
-          ascending: false,
-        });
-
-      if (error) {
-        setError(error.message);
-        setInfluencers([]);
-        setLoading(false);
-        return;
-      }
-
-      const rows = (data as InfluencerRowFromDB[]) ?? [];
-      const pickLatest = (
-        m: MetricsRow[] | null | undefined
-      ): MetricsRow | null => (Array.isArray(m) && m.length > 0 ? m[0] : null);
-
-      const normalized: InfluencerNormalized[] = rows.map((r) => ({
-        id: r.id,
-        platform: r.platform,
-        account_name: r.account_name,
-        gender: r.gender,
-        keywords: r.keywords,
-        profile_image_url: r.profile_image_url,
-        accounts_metrics: pickLatest(r.accounts_metrics),
-        last_profile_scraped_at: r.last_profile_scraped_at,
-        bookmarks: r.bookmarks ?? [],
-      }));
-
-      setInfluencers(normalized);
-      setLoading(false);
-    };
-
-    fetchBookmarked();
-  }, [user]);
-
-  const handleToggleBookmark = async (influencer: InfluencerNormalized) => {
-    if (!user) return;
-    const alreadyBookmarked = influencer.bookmarks.includes(user.id);
-    const updatedBookmarks = alreadyBookmarked
-      ? influencer.bookmarks.filter((id) => id !== user.id)
-      : [...influencer.bookmarks, user.id];
-
-    setInfluencers((prev) => {
-      if (!alreadyBookmarked) {
-        return prev.map((row) =>
-          row.id === influencer.id ? { ...row, bookmarks: updatedBookmarks } : row
-        );
-      }
-      return prev.filter((row) => row.id !== influencer.id);
-    });
-
-    const { error } = await supabase
-      .from("sns_accounts")
-      .update({ bookmarks: updatedBookmarks })
-      .eq("id", influencer.id);
-
-    if (error) {
-      setError(error.message);
-      setInfluencers((prev) =>
-        prev.map((row) =>
-          row.id === influencer.id ? { ...row, bookmarks: influencer.bookmarks } : row
-        )
-      );
-    }
-  };
+  const bookmarks = useBookmarks(user?.id);
 
   return (
-    <div className="min-h-screen min-w-270 px-4">
-      <div className="pb-5 flex justify-end">
-        <Button variant="outline" onClick={() => navigate("/search/search")}>
-          Back to Search
-        </Button>
-      </div>
-
-      {!user && (
-        <p className="text-sm text-muted-foreground">
-          Please log in to view your bookmarks.
-        </p>
+    <div className="-mx-4 -my-5 flex min-h-screen w-[calc(100%+2rem)] max-w-none min-w-0 flex-col gap-7 overflow-x-hidden bg-[#f9fafb] px-4 py-8 text-slate-950 sm:-mx-6 sm:w-[calc(100%+3rem)] sm:px-6 lg:-mx-8 lg:w-[calc(100%+4rem)] lg:px-8">
+      <BookmarksHero onBackToSearch={() => navigate("/search/search")} />
+      <BookmarksStatus
+        hasUser={Boolean(user)}
+        loading={bookmarks.loading}
+        error={bookmarks.error}
+        count={bookmarks.influencers.length}
+      />
+      <BookmarksSummary
+        loading={bookmarks.loading}
+        count={bookmarks.influencers.length}
+        summary={bookmarks.summary}
+      />
+      <BookmarkWatchlistAlertsPanel
+        influencers={bookmarks.influencers}
+        loading={bookmarks.loading}
+      />
+      {user && !bookmarks.loading && bookmarks.influencers.length > 0 && (
+        <BookmarkFoldersPanel
+          folders={bookmarks.folders}
+          selectedFolderId={bookmarks.selectedFolderId}
+          totalCount={bookmarks.influencers.length}
+          visibleCount={bookmarks.filteredInfluencers.length}
+          creating={bookmarks.creatingFolder}
+          error={bookmarks.folderError}
+          persistenceReady={bookmarks.folderPersistenceReady}
+          onSelectFolder={bookmarks.setSelectedFolderId}
+          onCreateFolder={bookmarks.handleCreateFolder}
+        />
       )}
-      {loading && <p className="text-sm text-muted-foreground">Loading...</p>}
-      {error && <p className="text-sm text-red-600">Error: {error}</p>}
-
-      {!loading && !error && user && influencers.length === 0 && (
-        <p className="text-sm text-muted-foreground">No bookmarked influencers.</p>
+      {user && !bookmarks.loading && bookmarks.influencers.length > 0 && (
+        <BookmarkTagsPanel
+          tags={bookmarks.tags}
+          selectedTagId={bookmarks.selectedTagId}
+          creating={bookmarks.creatingTag}
+          error={bookmarks.tagError}
+          persistenceReady={bookmarks.tagPersistenceReady}
+          onSelectTag={bookmarks.setSelectedTagId}
+          onCreateTag={bookmarks.handleCreateTag}
+        />
       )}
-
-      <div className="grid gap-4">
-        {influencers.map((influencer) => {
-          const metrics = influencer.accounts_metrics;
-          const keywordList =
-            typeof influencer.keywords === "string"
-              ? influencer.keywords
-                  .split(",")
-                  .map((s) => s.trim())
-                  .filter(Boolean)
-              : [];
-
-          return (
-            <Card
-              key={influencer.id}
-              className="w-full cursor-pointer transition-shadow hover:shadow-md"
-              role="button"
-              tabIndex={0}
-              onClick={() => navigate(`/search/influencer/${influencer.id}`)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  navigate(`/search/influencer/${influencer.id}`);
-                }
-              }}
-            >
-              <CardHeader>
-                <div className="flex items-start justify-between gap-4">
-                  <CardTitle className="pb-2">
-                    {influencer.account_name}
-                  </CardTitle>
-                  <div className="flex flex-col items-center gap-2">
-                    {influencer.profile_image_url ? (
-                      <img
-                        src={influencer.profile_image_url}
-                        alt={`${influencer.account_name} profile`}
-                        className="h-16 w-16 shrink-0 rounded-full object-cover"
-                        loading="lazy"
-                      />
-                    ) : null}
-                    {user ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        className="border-0"
-                        aria-pressed={influencer.bookmarks.includes(user.id)}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleToggleBookmark(influencer);
-                        }}
-                      >
-                        {influencer.bookmarks.includes(user.id) ? (
-                          <img
-                            src={starToggle}
-                            alt="favorite"
-                            className="h-5 w-5"
-                          />
-                        ) : (
-                          <img src={star} alt="favorite" className="h-5 w-5" />
-                        )}
-                      </Button>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="flex flex-col gap-4 md:flex-row md:gap-6">
-                  <CardDescription className="flex-1">
-                    <div className="font-medium text-foreground">
-                      Information
-                    </div>
-                    <div className="flex flex-col text-muted-foreground">
-                      <span>Platform: {influencer.platform}</span>
-                      <span>
-                        Keywords:{" "}
-                        {keywordList.length ? keywordList.join(", ") : "N/A"}
-                      </span>
-                      <span>
-                        Last Updated:{" "}
-                        {formatDateYmd(influencer.last_profile_scraped_at)}
-                      </span>
-                    </div>
-                  </CardDescription>
-
-                  <CardDescription className="flex-1">
-                    <div className="font-medium text-foreground">Metrics</div>
-                    <div className="flex flex-col text-muted-foreground">
-                      <span>Posts: {metrics?.posts ?? "N/A"}</span>
-                      <span>Followers: {metrics?.followers ?? "N/A"}</span>
-                      <span>Max Likes: {metrics?.maximum_likes ?? "N/A"}</span>
-                    </div>
-                  </CardDescription>
-                </div>
-              </CardHeader>
-
-              <CardContent />
-            </Card>
-          );
-        })}
-      </div>
+      {user && !bookmarks.loading && bookmarks.influencers.length > 0 && (
+        <BookmarkPriorityPanel
+          selectedPriority={bookmarks.selectedPriority}
+          totalCount={bookmarks.influencers.length}
+          visibleCount={bookmarks.filteredInfluencers.length}
+          error={bookmarks.priorityError}
+          persistenceReady={bookmarks.priorityPersistenceReady}
+          onSelectPriority={bookmarks.setSelectedPriority}
+        />
+      )}
+      {user && !bookmarks.loading && bookmarks.influencers.length > 0 && (
+        <BookmarkReadinessPanel
+          influencers={bookmarks.influencers}
+          selectedReadiness={bookmarks.selectedReadiness}
+          totalCount={bookmarks.influencers.length}
+          visibleCount={bookmarks.filteredInfluencers.length}
+          onSelectReadiness={bookmarks.setSelectedReadiness}
+        />
+      )}
+      {user && !bookmarks.loading && bookmarks.influencers.length > 0 && (
+        <BookmarkReadinessStatus
+          error={bookmarks.readinessError}
+          persistenceReady={bookmarks.readinessPersistenceReady}
+        />
+      )}
+      {user && !bookmarks.loading && bookmarks.influencers.length > 0 && (
+        <BookmarkRiskPanel
+          influencers={bookmarks.influencers}
+          selectedRiskLevel={bookmarks.selectedRiskLevel}
+          totalCount={bookmarks.influencers.length}
+          visibleCount={bookmarks.filteredInfluencers.length}
+          onSelectRiskLevel={bookmarks.setSelectedRiskLevel}
+        />
+      )}
+      {user && !bookmarks.loading && bookmarks.influencers.length > 0 && (
+        <BookmarkRiskStatus
+          error={bookmarks.riskError}
+          persistenceReady={bookmarks.riskPersistenceReady}
+        />
+      )}
+      {user && !bookmarks.loading && bookmarks.influencers.length > 0 && (
+        <BookmarkRatingPanel
+          influencers={bookmarks.influencers}
+          selectedRating={bookmarks.selectedRating}
+          totalCount={bookmarks.influencers.length}
+          visibleCount={bookmarks.filteredInfluencers.length}
+          onSelectRating={bookmarks.setSelectedRating}
+        />
+      )}
+      {user && !bookmarks.loading && bookmarks.influencers.length > 0 && (
+        <BookmarkRatingStatus
+          error={bookmarks.ratingError}
+          persistenceReady={bookmarks.ratingPersistenceReady}
+        />
+      )}
+      {user && !bookmarks.loading && bookmarks.influencers.length > 0 && (
+        <BookmarkMemoStatus
+          error={bookmarks.memoError}
+          persistenceReady={bookmarks.memoPersistenceReady}
+        />
+      )}
+      {user && !bookmarks.loading && bookmarks.influencers.length > 0 && (
+        <BookmarkSourceStatus
+          error={bookmarks.sourceError}
+          persistenceReady={bookmarks.sourcePersistenceReady}
+        />
+      )}
+      <BookmarksFolderEmptyState
+        visible={
+          Boolean(user) &&
+          !bookmarks.loading &&
+          !bookmarks.error &&
+          bookmarks.influencers.length > 0 &&
+          bookmarks.filteredInfluencers.length === 0
+        }
+      />
+      <BookmarksGrid
+        influencers={bookmarks.filteredInfluencers}
+        userId={user?.id}
+        folders={bookmarks.folders}
+        tags={bookmarks.tags}
+        updatingFolderAssignment={bookmarks.updatingFolderAssignment}
+        updatingTagAssignment={bookmarks.updatingTagAssignment}
+        updatingPriorityId={bookmarks.updatingPriorityId}
+        updatingReadinessId={bookmarks.updatingReadinessId}
+        updatingRiskId={bookmarks.updatingRiskId}
+        updatingPriceId={bookmarks.updatingPriceId}
+        updatingContactId={bookmarks.updatingContactId}
+        updatingSnapshotId={bookmarks.updatingSnapshotId}
+        updatingRatingId={bookmarks.updatingRatingId}
+        updatingResearchChecklistId={bookmarks.updatingResearchChecklistId}
+        updatingMemoId={bookmarks.updatingMemoId}
+        researchChecklistError={bookmarks.researchChecklistError}
+        researchChecklistPersistenceReady={bookmarks.researchChecklistPersistenceReady}
+        riskError={bookmarks.riskError}
+        riskPersistenceReady={bookmarks.riskPersistenceReady}
+        priceError={bookmarks.priceError}
+        pricePersistenceReady={bookmarks.pricePersistenceReady}
+        contactError={bookmarks.contactError}
+        contactPersistenceReady={bookmarks.contactPersistenceReady}
+        snapshotError={bookmarks.snapshotError}
+        snapshotPersistenceReady={bookmarks.snapshotPersistenceReady}
+        onOpenInfluencer={(id) => navigate(`/search/influencer/${id}`)}
+        onToggleBookmark={bookmarks.handleToggleBookmark}
+        onPriorityChange={bookmarks.handlePriorityChange}
+        onReadinessChange={bookmarks.handleReadinessChange}
+        onRiskProfileSave={bookmarks.handleRiskProfileSave}
+        onPriceMemorySave={bookmarks.handlePriceMemorySave}
+        onContactInfoSave={bookmarks.handleContactInfoSave}
+        onSavedSnapshotCapture={bookmarks.handleSavedSnapshotCapture}
+        onRatingChange={bookmarks.handleRatingChange}
+        onResearchChecklistSave={bookmarks.handleResearchChecklistSave}
+        onMemoSave={bookmarks.handleMemoSave}
+        onToggleFolder={bookmarks.handleToggleFolderAssignment}
+        onToggleTag={bookmarks.handleToggleTagAssignment}
+      />
     </div>
   );
 }

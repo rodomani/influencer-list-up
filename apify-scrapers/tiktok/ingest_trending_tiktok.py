@@ -173,8 +173,7 @@ APIFY_TIKTOK_SEARCH_PAYLOAD_TEMPLATE = env_json(
 APIFY_TIKTOK_PROFILE_PAYLOAD_TEMPLATE = env_json(
     "APIFY_TIKTOK_PROFILE_PAYLOAD_TEMPLATE",
     {
-        # Replace these keys with what your actor expects:
-        "usernames": ["{username}"],
+        "profiles": ["{username}"],
         "resultsPerPage": "{maxItems}",
         "proxyCountry": "{proxyCountry}",
     },

@@ -1,4 +1,5 @@
-import { useState } from 'react'; import type { FormEvent } from 'react';
+import { useState } from 'react';
+import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -24,7 +25,7 @@ export function LoginPage() {
       } else {
         navigate('/home');
       }
-    } catch (err) {
+    } catch {
       setError('予期しないエラーが発生しました');
     } finally {
       setLoading(false);
@@ -32,16 +33,18 @@ export function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-muted/50">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="text-2xl">ログイン</CardTitle>
-          <CardDescription>ダッシュボードにログインしよう</CardDescription>
+    <div className="art-shell flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground">
+      <Card className="deco-motion w-full max-w-md">
+        <CardHeader className="text-center">
+          <div className="deco-kicker">インフルエンサー管理</div>
+          <CardTitle className="mt-3 text-3xl">ログイン</CardTitle>
+          <CardDescription>静かな分析空間へ戻りましょう。</CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="deco-rule mb-6" />
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <label htmlFor="email" className="text-sm font-medium">
+              <label htmlFor="email" className="deco-label">
                 メールアドレス
               </label>
               <input
@@ -50,13 +53,13 @@ export function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-11 w-full border px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
                 placeholder="mail@example.com"
                 disabled={loading}
               />
             </div>
             <div className="space-y-2">
-              <label htmlFor="password" className="text-sm font-medium">
+              <label htmlFor="password" className="deco-label">
                 パスワード
               </label>
               <input
@@ -65,13 +68,13 @@ export function LoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                className="h-11 w-full border px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
                 placeholder="••••••••"
                 disabled={loading}
               />
             </div>
             {error && (
-              <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">
+              <div className="border border-red-400/50 bg-red-950/30 p-3 text-sm text-red-200">
                 {error}
               </div>
             )}
@@ -81,7 +84,8 @@ export function LoginPage() {
             <Button
               type="button"
               onClick={() => navigate("/register")}
-              className="w-full bg-white text-primary hover:bg-primary hover:text-white"
+              variant="outline"
+              className="w-full"
               disabled={loading}
             >
               新規登録

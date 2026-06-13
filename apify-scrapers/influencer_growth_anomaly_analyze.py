@@ -211,8 +211,10 @@ def supabase_table_columns(table: str) -> Set[str]:
             "platform",
             "window_label",
             "growth_anomaly_score",
+            "analysis_status",
             "latest_anomaly_type",
             "latest_anomaly_date",
+            "latest_metric_date",
             "anomaly_events_count",
             "recent_spike_count",
             "recent_drop_count",
@@ -222,6 +224,8 @@ def supabase_table_columns(table: str) -> Set[str]:
             "created_at",
             "updated_at",
         }
+    if table == "analysis_unique_indexes":
+        return {"table_name", "tablename", "index_name", "indexname", "indexdef"}
     return set()
 
 
@@ -229,6 +233,7 @@ ACCOUNT_COLUMNS = supabase_table_columns("sns_accounts")
 ACCOUNT_METRIC_COLUMNS = supabase_table_columns("accounts_metrics")
 EVENT_COLUMNS = supabase_table_columns("account_growth_anomaly_events")
 SUMMARY_COLUMNS = supabase_table_columns("influencer_growth_anomaly_summary")
+INDEX_COLUMNS = supabase_table_columns("analysis_unique_indexes")
 
 
 @dataclass
@@ -257,6 +262,48 @@ def median_absolute_deviation(values: Sequence[float], center: float) -> float:
         return 0.0
     deviations = [abs(value - center) for value in values]
     return float(median(deviations))
+
+
+def validate_required_columns(table: str, available: Set[str], required: Set[str]) -> None:
+    missing = sorted(required - available)
+    if missing:
+        raise RuntimeError(f"{table} is missing required columns: {', '.join(missing)}")
+
+
+def validate_unique_index(table: str, columns: Sequence[str]) -> None:
+    if not INDEX_COLUMNS:
+        return
+    rows = sb_get(
+        "analysis_unique_indexes",
+        {"select": "*"},
+        range_from=0,
+        range_to=50,
+    )
+    expected = f"onpublic.{table}usingbtree({','.join(columns)})"
+    for row in rows:
+        row_table = str(row.get("table_name") or row.get("tablename") or "").strip()
+        if row_table != table:
+            continue
+        indexdef = str(row.get("indexdef") or "").lower().replace('"', "").replace(" ", "")
+        if "createuniqueindex" in indexdef and expected in indexdef:
+            return
+    raise RuntimeError(f"Missing unique index for {table} on ({', '.join(columns)})")
+
+
+def validate_runtime_schema() -> None:
+    validate_required_columns("accounts_metrics", ACCOUNT_METRIC_COLUMNS, {"account_id", "metric_date", "followers"})
+    validate_required_columns(
+        "account_growth_anomaly_events",
+        EVENT_COLUMNS,
+        {"account_id", "platform", "metric_date", "anomaly_type", "severity_score", "analysis_version", "updated_at"},
+    )
+    validate_required_columns(
+        "influencer_growth_anomaly_summary",
+        SUMMARY_COLUMNS,
+        {"account_id", "platform", "window_label", "growth_anomaly_score", "analysis_status", "analysis_version", "updated_at"},
+    )
+    validate_unique_index("account_growth_anomaly_events", ("account_id", "metric_date", "analysis_version"))
+    validate_unique_index("influencer_growth_anomaly_summary", ("account_id", "window_label", "analysis_version"))
 
 
 def severity_from_robust_z(robust_z_score: float, anomaly_type: str) -> float:
@@ -469,6 +516,7 @@ def payload_for_summary(account_id: int, platform: str, events: Sequence[GrowthE
         "platform": platform,
         "window_label": WINDOW_LABEL,
         "growth_anomaly_score": growth_anomaly_score(events),
+        "analysis_status": "ok",
         "latest_anomaly_type": latest.anomaly_type if latest else None,
         "latest_anomaly_date": latest.metric_date.isoformat() if latest else None,
         "anomaly_events_count": len(events),
@@ -480,6 +528,41 @@ def payload_for_summary(account_id: int, platform: str, events: Sequence[GrowthE
         "updated_at": utcnow_iso(),
     }
     return {key: value for key, value in payload.items() if key in SUMMARY_COLUMNS}
+
+
+def payload_for_summary_status(
+    account_id: int,
+    platform: str,
+    analysis_status: str,
+    latest_metric_date: Optional[date],
+) -> Dict[str, Any]:
+    payload = {
+        "account_id": account_id,
+        "platform": platform,
+        "window_label": WINDOW_LABEL,
+        "growth_anomaly_score": 0.0,
+        "analysis_status": analysis_status,
+        "latest_anomaly_type": None,
+        "latest_anomaly_date": None,
+        "latest_metric_date": latest_metric_date.isoformat() if latest_metric_date else None,
+        "anomaly_events_count": 0,
+        "recent_spike_count": 0,
+        "recent_drop_count": 0,
+        "recent_flatline_count": 0,
+        "max_severity_score": 0.0,
+        "analysis_version": ANALYSIS_VERSION,
+        "updated_at": utcnow_iso(),
+    }
+    return {key: value for key, value in payload.items() if key in SUMMARY_COLUMNS}
+
+
+def upsert_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
+    upserted = sb_upsert(
+        "influencer_growth_anomaly_summary",
+        [payload],
+        on_conflict="account_id,window_label,analysis_version",
+    )
+    return upserted[0] if upserted else payload
 
 
 def sync_events_for_account(account_id: int, platform: str, events: Sequence[GrowthEvent]) -> int:
@@ -512,57 +595,54 @@ def analyze_account(account_id: int, platform: str) -> Dict[str, Any]:
     points = build_growth_points(rows)
     latest_metric_date = max((point.metric_date for point in points), default=None)
     if not points:
+        summary = upsert_summary(payload_for_summary_status(account_id, platform, "no_metrics", latest_metric_date))
         return {
             "account_id": account_id,
             "platform": platform,
             "history_points": 0,
             "events_written": 0,
             "analysis_status": "no_metrics",
-            "growth_anomaly_score": None,
-            "latest_metric_date": None,
+            **summary,
         }
     if latest_metric_date and latest_metric_date < (datetime.now(timezone.utc).date() - timedelta(days=MAX_METRIC_AGE_DAYS)):
+        summary = upsert_summary(payload_for_summary_status(account_id, platform, "stale_source_data", latest_metric_date))
         return {
             "account_id": account_id,
             "platform": platform,
             "history_points": len(points),
             "events_written": 0,
             "analysis_status": "stale_source_data",
-            "growth_anomaly_score": None,
-            "latest_metric_date": latest_metric_date.isoformat(),
+            **summary,
         }
     if len(points) < MIN_HISTORY_POINTS:
+        summary = upsert_summary(payload_for_summary_status(account_id, platform, "insufficient_history", latest_metric_date))
         return {
             "account_id": account_id,
             "platform": platform,
             "history_points": len(points),
             "events_written": 0,
             "analysis_status": "insufficient_history",
-            "growth_anomaly_score": None,
-            "latest_metric_date": latest_metric_date.isoformat() if latest_metric_date else None,
+            **summary,
         }
 
     events = detect_growth_events(points)
     events_written = sync_events_for_account(account_id, platform, events)
     summary_payload = payload_for_summary(account_id, platform, events)
-    upserted = sb_upsert(
-        "influencer_growth_anomaly_summary",
-        [summary_payload],
-        on_conflict="account_id,window_label,analysis_version",
-    )
-    summary = upserted[0] if upserted else summary_payload
+    if "latest_metric_date" in SUMMARY_COLUMNS:
+        summary_payload["latest_metric_date"] = latest_metric_date.isoformat() if latest_metric_date else None
+    summary = upsert_summary(summary_payload)
     return {
         "account_id": account_id,
         "platform": platform,
         "history_points": len(points),
         "events_written": events_written,
         "analysis_status": "ok",
-        "latest_metric_date": latest_metric_date.isoformat() if latest_metric_date else None,
         **summary,
     }
 
 
 def main() -> None:
+    validate_runtime_schema()
     explicit_account_id = safe_int(os.getenv("GROWTH_ANOMALY_ACCOUNT_ID"))
     platform_filter = env_str("GROWTH_ANOMALY_PLATFORM", "").lower() or None
 

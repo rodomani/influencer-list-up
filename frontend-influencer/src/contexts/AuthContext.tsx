@@ -7,6 +7,7 @@ interface AuthContextType {
   user: User | null;
   session: Session | null;
   loading: boolean;
+  authError: string | null;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
 }
@@ -17,15 +18,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [verifiedUserId, setVerifiedUserId] = useState<string | null>(null);
 
   useEffect(() => {
     // Check active sessions and sets the user
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
+    supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => {
+        setSession(session);
+        setUser(session?.user ?? null);
+        setAuthError(null);
+      })
+      .catch((error: Error) => {
+        setAuthError(error.message);
+        setSession(null);
+        setUser(null);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
   
     // Listen for changes on auth state (sign in, sign out, etc.)
     const {
@@ -86,6 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     user,
     session,
     loading,
+    authError,
     signIn,
     signOut,
   };

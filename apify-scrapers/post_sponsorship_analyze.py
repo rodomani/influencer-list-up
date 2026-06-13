@@ -301,11 +301,50 @@ def supabase_table_columns(table: str) -> Set[str]:
             "updated_at",
             "created_at",
         }
+    if table == "analysis_unique_indexes":
+        return {"table_name", "tablename", "index_name", "indexname", "indexdef"}
     return set()
 
 
 POSTS_COLUMNS = supabase_table_columns("posts")
 SPONSORSHIP_COLUMNS = supabase_table_columns("post_sponsorship_analysis")
+INDEX_COLUMNS = supabase_table_columns("analysis_unique_indexes")
+
+
+def validate_required_columns(table: str, available: Set[str], required: Set[str]) -> None:
+    missing = sorted(required - available)
+    if missing:
+        raise RuntimeError(f"{table} is missing required columns: {', '.join(missing)}")
+
+
+def validate_unique_index(table: str, columns: Sequence[str]) -> None:
+    if not INDEX_COLUMNS:
+        return
+    rows = sb_get(
+        "analysis_unique_indexes",
+        {"select": "*"},
+        range_from=0,
+        range_to=50,
+    )
+    expected = f"onpublic.{table}usingbtree({','.join(columns)})"
+    for row in rows:
+        row_table = str(row.get("table_name") or row.get("tablename") or "").strip()
+        if row_table != table:
+            continue
+        indexdef = str(row.get("indexdef") or "").lower().replace('"', "").replace(" ", "")
+        if "createuniqueindex" in indexdef and expected in indexdef:
+            return
+    raise RuntimeError(f"Missing unique index for {table} on ({', '.join(columns)})")
+
+
+def validate_runtime_schema() -> None:
+    validate_required_columns("posts", POSTS_COLUMNS, {"id"})
+    validate_required_columns(
+        "post_sponsorship_analysis",
+        SPONSORSHIP_COLUMNS,
+        {"post_id", "is_sponsored", "sponsorship_confidence", "sponsorship_type", "analysis_version", "updated_at"},
+    )
+    validate_unique_index("post_sponsorship_analysis", ("post_id", "analysis_version"))
 
 
 def normalize_text(text: str) -> str:
@@ -527,6 +566,7 @@ def analyze_recent_posts_for_account(account_id: int, platform: Optional[str] = 
 
 
 def main() -> None:
+    validate_runtime_schema()
     explicit_account_id = safe_int(os.getenv("SPONSORSHIP_ACCOUNT_ID"))
     platform_filter = env_str("SPONSORSHIP_PLATFORM", "").lower() or None
 

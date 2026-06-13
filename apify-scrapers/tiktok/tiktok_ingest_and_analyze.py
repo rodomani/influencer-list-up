@@ -41,6 +41,13 @@ def env_int(k: str, default: int) -> int:
     return int(v) if v and v.strip() else default
 
 
+def env_bool(k: str, default: bool = False) -> bool:
+    v = os.getenv(k)
+    if not v or not v.strip():
+        return default
+    return v.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -63,6 +70,7 @@ TIME_MAX = env_int("TIME_MAX", 100)
 POST_LIMIT = env_int("TIKTOK_POST_LIMIT", 20)
 
 SLEEP_BETWEEN_CALLS_SEC = 0.2
+DEBUG_TIMERS = env_bool("DEBUG_TIMERS", False)
 
 # Apify
 TIKTOK_COMMENT_ACTOR = os.getenv("TIKTOK_COMMENT_ACTOR", "clockworks~tiktok-comments-scraper").strip()
@@ -190,7 +198,8 @@ def fetch_comments_sample(post_url: str) -> List[Dict]:
 
     raw = apify_run_tiktok_comments(payload)
     time.sleep(SLEEP_BETWEEN_CALLS_SEC)
-    print(f"[TIMER] apify_fetch_sec={_time.time() - t0:.2f} url={post_url}")
+    if DEBUG_TIMERS:
+        print(f"[TIMER] apify_fetch_sec={_time.time() - t0:.2f} url={post_url}")
 
     items = _extract_comment_items(raw)
     comments = [_normalize_comment(it) for it in items]
@@ -763,7 +772,8 @@ def process_post(post: dict) -> None:
 
     t_filter = _time.time()
     filtered, spam_rate = filter_comments(all_comments)
-    print(f"[TIMER] filter_sec={_time.time() - t_filter:.2f} post_id={post_id}")
+    if DEBUG_TIMERS:
+        print(f"[TIMER] filter_sec={_time.time() - t_filter:.2f} post_id={post_id}")
     filtered_total = len(filtered)
 
     if filtered_total == 0:
@@ -800,7 +810,8 @@ def process_post(post: dict) -> None:
     toxicity_score, hate_score = compute_toxicity_and_hate(filtered)
     language_distribution = compute_language_distribution(filtered)
     emotion_distribution = compute_emotion_distribution(filtered)
-    print(f"[TIMER] models_sec={_time.time() - t_models:.2f} post_id={post_id}")
+    if DEBUG_TIMERS:
+        print(f"[TIMER] models_sec={_time.time() - t_models:.2f} post_id={post_id}")
 
     t_derived = _time.time()
     entities = extract_audience_interest_entities(filtered, top_k=20)
@@ -808,7 +819,8 @@ def process_post(post: dict) -> None:
     pros, cons = compute_top_pros_cons(filtered, top_n=3)
     summary = build_summary(sentiment_pos, sentiment_neg, toxicity_score, hate_score, pros, cons)
     topic_labels = compute_topic_labels(filtered)
-    print(f"[TIMER] derived_sec={_time.time() - t_derived:.2f} post_id={post_id}")
+    if DEBUG_TIMERS:
+        print(f"[TIMER] derived_sec={_time.time() - t_derived:.2f} post_id={post_id}")
 
     upsert_post_comment_analysis(
         post_id,
@@ -837,7 +849,8 @@ def process_post(post: dict) -> None:
     t_db = _time.time()
     write_evidence(post_id, filtered)
     mark_post_scraped(post_id)
-    print(f"[TIMER] db_sec={_time.time() - t_db:.2f} post_id={post_id}")
+    if DEBUG_TIMERS:
+        print(f"[TIMER] db_sec={_time.time() - t_db:.2f} post_id={post_id}")
     print(
         f"[OK] post_id={post_id} post_url={post_url} sampled={sampled_total} kept={filtered_total} spam_rate={spam_rate:.3f} total_sec={_time.time() - t_all:.2f}"
     )

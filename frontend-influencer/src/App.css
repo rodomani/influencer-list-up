@@ -1,3 +1,228 @@
 #root {
   min-height: 100vh;
 }
+
+body {
+  background: #f9fafb;
+}
+
+::selection {
+  background: rgba(212, 175, 55, 0.24);
+  color: #111827;
+}
+
+.art-shell {
+  background: #f9fafb;
+}
+
+.deco-page {
+  animation: deco-reveal 520ms ease-out both;
+  margin: 0 auto;
+  max-width: none;
+  width: 100%;
+}
+
+.deco-hero,
+.deco-panel,
+[data-slot="card"],
+[data-slot="field-set"] {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 0 !important;
+  background: #ffffff !important;
+  box-shadow: 0 24px 80px -56px rgba(15, 23, 42, 0.34) !important;
+}
+
+.deco-hero::before,
+.deco-panel::before,
+[data-slot="card"]::before,
+[data-slot="field-set"]::before {
+  display: none;
+}
+
+.deco-hero {
+  padding: clamp(1.4rem, 3vw, 2.25rem);
+}
+
+.deco-panel,
+[data-slot="field-set"] {
+  min-inline-size: 0 !important;
+  padding: clamp(1.2rem, 2.5vw, 1.8rem) !important;
+  width: 100% !important;
+}
+
+.deco-kicker {
+  color: #d4af37;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.section-title {
+  color: #111827;
+  font-size: clamp(1.6rem, 2.4vw, 2.6rem);
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  line-height: 1.05;
+  text-transform: uppercase;
+}
+
+.section-subtitle {
+  color: #64748b;
+  font-size: 0.95rem;
+  line-height: 1.7;
+  margin-top: 0.45rem;
+}
+
+.deco-rule {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(212, 175, 55, 0.55), transparent);
+}
+
+.deco-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.deco-stat {
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  padding: 1rem;
+}
+
+.deco-label,
+[data-slot="field-label"],
+[data-slot="field-legend"] {
+  color: #d4af37 !important;
+  font-size: 0.72rem !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.16em !important;
+  text-transform: uppercase !important;
+}
+
+.deco-value {
+  color: #111827;
+  font-size: 1.2rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.deco-copy {
+  color: #64748b;
+  line-height: 1.75;
+}
+
+.deco-chip {
+  border: 1px solid rgba(212, 175, 55, 0.4);
+  background: rgba(212, 175, 55, 0.08);
+  color: #111827;
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.9rem;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.73rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.deco-link {
+  color: #d4af37;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.deco-avatar {
+  border: 1px solid rgba(212, 175, 55, 0.55);
+  box-shadow: 0 0 0 6px rgba(212, 175, 55, 0.08);
+}
+
+.deco-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.deco-motion {
+  transition: transform 260ms ease, border-color 260ms ease, background 260ms ease, box-shadow 260ms ease;
+}
+
+.deco-motion:hover {
+  border-color: rgba(212, 175, 55, 0.72) !important;
+  box-shadow: 0 28px 90px -60px rgba(15, 23, 42, 0.42) !important;
+  transform: translateY(-2px);
+}
+
+button,
+[role="button"],
+a {
+  transition: color 220ms ease, background-color 220ms ease, border-color 220ms ease, transform 220ms ease, opacity 220ms ease;
+}
+
+button:hover,
+[role="button"]:hover {
+  transform: translateY(-1px);
+}
+
+button[data-slot="button"] {
+  border-radius: 0.15rem !important;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+button[data-variant="default"],
+button:not([data-variant]) {
+  background: #046307 !important;
+  color: #ffffff !important;
+}
+
+button[data-variant="outline"] {
+  border-color: #d1d5db !important;
+  color: #111827 !important;
+  background: #ffffff !important;
+}
+
+input,
+textarea,
+[data-slot="select-trigger"] {
+  border-color: #d1d5db !important;
+  background: #ffffff !important;
+  color: #111827 !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #94a3b8;
+}
+
+[data-slot="card-title"] {
+  color: #111827;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+[data-slot="card-description"],
+.text-muted-foreground {
+  color: #64748b !important;
+}
+
+.bg-muted,
+.bg-muted\/20,
+.bg-background\/70 {
+  background-color: #f9fafb !important;
+}
+
+@keyframes deco-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

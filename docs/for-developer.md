@@ -1,109 +1,113 @@
-# 環境構築手順
+# Developer Guide
 
-## ディレクトリ構造
-docs/ mdファイルを格納
-frontend/ フロントエンド側のコードを格納
-supabase/functions バックエンド側のコードを格納
-supabase/functions/hoge/index.ts 関数hogeのコード
-supabase/functions/_shared/*.ts 共通利用のコード
+## Directory Structure
 
-## フロントエンド環境の構築
-### Viteプロジェクトの作成
+- `frontend-influencer/`: React/Vite frontend.
+- `frontend-influencer/src/pages/`: page-level UI for auth, home, search, bookmarks, and campaigns.
+- `frontend-influencer/src/components/`: shared UI and app shell components.
+- `frontend-influencer/src/lib/supabase.ts`: browser Supabase client.
+- `frontend-influencer/src/contexts/AuthContext.tsx`: auth state and sign-in/out helpers.
+- `supabase/functions/`: Supabase Edge Functions.
+- `supabase/migrations/`: Supabase database migrations.
+- `apify-scrapers/`: Python scraping, ingestion, and analysis jobs.
+- `docs/`: project documentation.
+
+## Frontend Setup
+
+Install dependencies:
+
 ```bash
-cd frontend
-
-npm create vite@latest
-# Need to install the following packages:
-# create-vite@******
-# Ok to proceed? ※yを入力
-#
-# Project name:
-# ※プロジェクトに沿った適当な名前をつける
-#
-# Select a framework:
-# ⚫︎ React
-# 
-# Select a variant:
-# ⚫︎ Typescript
-# 
-# Use rolldown-vite (Experimental)?:
-# ⚫︎ No
-#
-# Install with npm and start now?
-# ⚫︎ Yes
-```
-### Shadcnの環境構築 (https://ui.shadcn.com/docs/installation/vite)
-
-
-### firebaseとの紐付け
-```bash
-# ブラウザを使ってfirebaseアカウントでログイン
-firebase login
-
-cd frontend
-firebase init
-# 必要ファイルの一括作成
-# ? Which Firebase features do you want to set up for this directory?
-#       ⚪︎ Hosting ※これのみをスペースキーで選択 → エンタキー
-#
-# === Project Setup
-# ? Please select an option: 
-# > Use an existing project ※すでにfirebase consoleでプロジェクトを作成している場合
-# Create a new project ※その場で作成
-# 
-# ? Select a default Firebase project for this directory ※Use an existing projectを選択した場合はここでプロジェクトと紐付けする
-# 
-# === Hosting Setup
-# ? What do you want to use as your public directory ※distを入力
-#
-# Configure as a single-page app (rewrite all urls to /index.html)? 
-# Set up automatic builds and deploys with GitHub? (Y/n) ※nを入力
-```
-npm run buildをするとviteの標準であるdistにビルド結果が格納される。firebase deploy時のデフォルトはpublicであるため、修正する。
-```json:firebase.json
-{
-  "hosting": {
-    "public": "dist",
-  }
-}}
+cd frontend-influencer
+npm install
 ```
 
+Create `frontend-influencer/.env` with the browser-safe Supabase values:
 
-## フロントエンドのテスト
 ```bash
-cd frontend
+VITE_SUPABASE_URL=...
+VITE_SUPABASE_ANON_KEY=...
+```
+
+Run locally:
+
+```bash
+cd frontend-influencer
 npm run dev
 ```
-1. npm run dev を実行 → package.jsonで定義されたviteコマンドが実行される
-2. Viteは frontend/index.html をエントリーポイントとして読み込む
-3. index.html:11 の<script type="module" src="/src/main.tsx"></script>でmain.tsxが読み込まれる
-4. main.tsx → App.tsx という流れで呼び出される
 
+Verify before shipping:
 
-## バックエンドの構築
-
-### Supabaseとの紐付け
 ```bash
-# supabase projectとリンクする。deployを実行した際にこのプロジェクトにデプロイされる。
-supabase link --project-ref hoge 
+npm run check
 ```
 
-### Supabaseプロジェクトの設定
-Project Settings -> API Keys
-Project Settings -> JWT Keys
-でlegacyを使わないように変更する
+For frontend-only checks:
 
-API Keys -> create new key で
-publishable keyとsecret keyを取得。
-
-Edge functionsを使う場合には
-Edge Functions -> Secretsにこれらのkeyを追加しておく
-
-### Edge Functionsのデプロイ
 ```bash
-ls # supabase, frontend, docsが表示されればOK
-supabase functions deploy HOGEHOGE --no-verify-jwt
+npm run check:frontend
 ```
-従来は自動でJWT検証されていたが、JWT Signing Keyに移行すると、自動JWT検証では検証できなくなる。
-そのため、--no-verify-jwtにして、Edge Functions側でjwt検証する方向で実装する。
-supabaseAdmin.auth.getClaimsやsupabaseAdmin.auth.getUser
+
+The Vite build writes to `frontend-influencer/dist`, and `frontend-influencer/firebase.json` is configured to deploy that directory. See `docs/regression-checks.md` for the complete checklist.
+
+## Supabase Setup
+
+Link the project if needed:
+
+```bash
+supabase link --project-ref <project-ref>
+```
+
+Apply migrations:
+
+```bash
+supabase db push
+```
+
+Deploy an Edge Function:
+
+```bash
+supabase functions deploy <function-name> --no-verify-jwt
+```
+
+The current Edge Functions use Supabase service-role access internally where needed. Keep service-role keys in Supabase function secrets, never in frontend env files.
+
+## Python Scraper Setup
+
+Use the project virtualenv for scraper work:
+
+```bash
+source .venv/bin/activate
+```
+
+The backend scripts expect environment variables in `apify-scrapers/.env`, including:
+
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `APIFY_TOKEN`
+- `YOUTUBE_API_KEY`
+
+Run a syntax check:
+
+```bash
+python3 -m compileall -q apify-scrapers
+```
+
+Run the normal bookmarked refresh:
+
+```bash
+.venv/bin/python apify-scrapers/bookmarked_weekly_refresh.py
+```
+
+Run a one-account smoke refresh:
+
+```bash
+npm run smoke:bookmarked-refresh
+```
+
+## Development Notes
+
+- Use `.venv/bin/python` for backend refresh jobs. The system Python may not have required ML/comment-analysis packages.
+- Use `bookmarked_weekly_refresh.py` as the normal scheduled backend entrypoint.
+- Use platform-specific scraper scripts only for debugging a single platform.
+- After database migrations, run the smoke refresh and check `analysis_job_runs`.
+- Do not expose `SUPABASE_SERVICE_ROLE_KEY`, Apify tokens, or API keys in frontend code.

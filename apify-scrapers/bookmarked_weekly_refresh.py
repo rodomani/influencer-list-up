@@ -9,6 +9,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import requests
 from dotenv import load_dotenv
+import influencer_commenter_quality_aggregate as commenter_quality_aggregate
 import influencer_growth_anomaly_analyze as growth_anomaly_analyze
 import influencer_performance_aggregate as performance_aggregate
 import post_commenter_quality_analyze as commenter_quality_analyze
@@ -34,6 +35,16 @@ def env_float(key: str, default: float) -> float:
     return float(value) if value and value.strip() else default
 
 
+def env_int_list(key: str) -> List[int]:
+    value = os.getenv(key, "")
+    ids: List[int] = []
+    for token in value.split(","):
+        token = token.strip()
+        if token:
+            ids.append(int(token))
+    return ids
+
+
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -56,6 +67,7 @@ BOOKMARK_MAX_ACCOUNTS_PER_RUN = env_int("BOOKMARK_MAX_ACCOUNTS_PER_RUN", 200)
 BOOKMARK_ACCOUNT_BATCH_SIZE = env_int("BOOKMARK_ACCOUNT_BATCH_SIZE", 100)
 BOOKMARK_SLEEP_SECONDS = env_float("BOOKMARK_SLEEP_SECONDS", 0.2)
 BOOKMARK_MIN_POST_SUCCESS_RATE = env_float("BOOKMARK_MIN_POST_SUCCESS_RATE", 0.8)
+BOOKMARK_ACCOUNT_IDS = env_int_list("BOOKMARK_ACCOUNT_IDS")
 
 SUPPORTED_PLATFORMS = ("instagram", "tiktok", "youtube", "x")
 
@@ -121,6 +133,22 @@ def sb_get(
     return data if isinstance(data, list) else []
 
 
+def sb_upsert(table: str, rows: List[Dict[str, Any]], on_conflict: Optional[str] = None) -> List[Dict[str, Any]]:
+    if not rows:
+        return []
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    headers = sb_headers()
+    headers["Prefer"] = "resolution=merge-duplicates,return=representation"
+    params: Dict[str, str] = {}
+    if on_conflict:
+        params["on_conflict"] = on_conflict
+    response = requests.post(url, headers=headers, params=params, json=rows, timeout=60)
+    if not response.ok:
+        raise RuntimeError(f"UPSERT {table} failed: {response.status_code} {response.text[:500]}")
+    data = response.json()
+    return data if isinstance(data, list) else []
+
+
 def chunked(values: Iterable[int], size: int) -> Iterable[List[int]]:
     batch: List[int] = []
     for value in values:
@@ -132,7 +160,207 @@ def chunked(values: Iterable[int], size: int) -> Iterable[List[int]]:
         yield batch
 
 
+def supabase_table_columns(table: str) -> set[str]:
+    try:
+        rows = sb_get(table, {"select": "*", "limit": "1"})
+        if rows:
+            return set(rows[0].keys())
+    except Exception:
+        pass
+
+    if table == "analysis_job_runs":
+        return {
+            "analysis_name",
+            "account_id",
+            "platform",
+            "status",
+            "rows_written",
+            "error_message",
+            "details",
+            "analysis_version",
+            "started_at",
+            "finished_at",
+        }
+    if table == "influencer_growth_anomaly_summary":
+        return {
+            "account_id",
+            "platform",
+            "window_label",
+            "growth_anomaly_score",
+            "analysis_status",
+            "analysis_version",
+            "updated_at",
+        }
+    if table == "influencer_performance_summary":
+        return {
+            "account_id",
+            "window",
+            "engagement_trend_score",
+            "updated_at",
+        }
+    if table == "influencer_commenter_quality_summary":
+        return {
+            "account_id",
+            "platform",
+            "window_label",
+            "avg_unique_commenters",
+            "updated_at",
+        }
+    if table == "analysis_unique_indexes":
+        return {"table_name", "tablename", "index_name", "indexname", "indexdef"}
+    return set()
+
+
+JOB_RUN_COLUMNS = supabase_table_columns("analysis_job_runs")
+GROWTH_SUMMARY_COLUMNS = supabase_table_columns("influencer_growth_anomaly_summary")
+PERFORMANCE_SUMMARY_COLUMNS = supabase_table_columns("influencer_performance_summary")
+COMMENTER_SUMMARY_COLUMNS = supabase_table_columns("influencer_commenter_quality_summary")
+INDEX_COLUMNS = supabase_table_columns("analysis_unique_indexes")
+
+
+def validate_required_columns(table: str, available: set[str], required: set[str]) -> None:
+    missing = sorted(required - available)
+    if missing:
+        raise RuntimeError(f"{table} is missing required columns: {', '.join(missing)}")
+
+
+def validate_unique_index(table: str, columns: tuple[str, ...]) -> None:
+    if not INDEX_COLUMNS:
+        return
+    rows = sb_get(
+        "analysis_unique_indexes",
+        {"select": "*"},
+        range_from=0,
+        range_to=50,
+    )
+    expected = f"onpublic.{table}usingbtree({','.join(columns)})"
+    for row in rows:
+        row_table = str(row.get("table_name") or row.get("tablename") or "").strip()
+        if row_table != table:
+            continue
+        indexdef = str(row.get("indexdef") or "").lower().replace('"', "").replace(" ", "")
+        if "createuniqueindex" in indexdef and expected in indexdef:
+            return
+    raise RuntimeError(f"Missing unique index for {table} on ({', '.join(columns)})")
+
+
+def validate_runtime_schema() -> None:
+    if hasattr(growth_anomaly_analyze, "validate_runtime_schema"):
+        growth_anomaly_analyze.validate_runtime_schema()
+    if hasattr(commenter_quality_analyze, "validate_runtime_schema"):
+        commenter_quality_analyze.validate_runtime_schema()
+    if hasattr(sponsorship_analyze, "validate_runtime_schema"):
+        sponsorship_analyze.validate_runtime_schema()
+    if hasattr(commenter_quality_aggregate, "validate_runtime_schema"):
+        commenter_quality_aggregate.validate_runtime_schema()
+    validate_required_columns(
+        "analysis_job_runs",
+        JOB_RUN_COLUMNS,
+        {"analysis_name", "account_id", "platform", "status", "finished_at"},
+    )
+    validate_required_columns(
+        "influencer_growth_anomaly_summary",
+        GROWTH_SUMMARY_COLUMNS,
+        {"account_id", "platform", "window_label", "growth_anomaly_score", "analysis_status", "updated_at"},
+    )
+    validate_required_columns(
+        "influencer_performance_summary",
+        PERFORMANCE_SUMMARY_COLUMNS,
+        {"account_id", "window", "engagement_trend_score", "updated_at"},
+    )
+    validate_required_columns(
+        "influencer_commenter_quality_summary",
+        COMMENTER_SUMMARY_COLUMNS,
+        {"account_id", "platform", "window_label", "avg_unique_commenters", "updated_at"},
+    )
+    validate_unique_index("influencer_growth_anomaly_summary", ("account_id", "window_label", "analysis_version"))
+    validate_unique_index("influencer_performance_summary", ("account_id", "window"))
+    validate_unique_index("influencer_commenter_quality_summary", ("account_id", "window_label", "analysis_version"))
+
+
+def record_analysis_run(
+    analysis_name: str,
+    account_id: int,
+    platform: str,
+    status: str,
+    *,
+    rows_written: Optional[int] = None,
+    error_message: Optional[str] = None,
+    details: Optional[Dict[str, Any]] = None,
+    analysis_version: Optional[str] = None,
+    started_at: Optional[str] = None,
+) -> None:
+    if not JOB_RUN_COLUMNS:
+        return
+
+    payload = {
+        "analysis_name": analysis_name,
+        "account_id": account_id,
+        "platform": platform,
+        "status": status,
+        "rows_written": rows_written,
+        "error_message": error_message[:1000] if error_message else None,
+        "details": details or {},
+        "analysis_version": analysis_version,
+        "started_at": started_at or utcnow_iso(),
+        "finished_at": utcnow_iso(),
+    }
+    payload = {key: value for key, value in payload.items() if key in JOB_RUN_COLUMNS}
+    try:
+        sb_upsert("analysis_job_runs", [payload], on_conflict=None)
+    except Exception:
+        return
+
+
+def get_latest_analysis_run_map(account_ids: List[int], analysis_names: List[str]) -> Dict[tuple[int, str], str]:
+    if not account_ids or not analysis_names or not JOB_RUN_COLUMNS:
+        return {}
+
+    rows: List[Dict[str, Any]] = []
+    for batch in chunked(account_ids, 100):
+        rows.extend(
+            sb_get(
+                "analysis_job_runs",
+                {
+                    "select": "account_id,analysis_name,finished_at,status",
+                    "account_id": f"in.({','.join(str(account_id) for account_id in batch)})",
+                    "analysis_name": f"in.({','.join(analysis_names)})",
+                    "status": "not.eq.failed",
+                    "order": "finished_at.desc",
+                },
+                range_from=0,
+                range_to=max(len(batch) * max(len(analysis_names), 1) * 2 - 1, 0),
+            )
+        )
+
+    latest_by_key: Dict[tuple[int, str], datetime] = {}
+    for row in rows:
+        account_id = row.get("account_id")
+        analysis_name = row.get("analysis_name")
+        finished_at = iso_to_dt(row.get("finished_at"))
+        if account_id is None or analysis_name is None or finished_at is None:
+            continue
+        key = (int(account_id), str(analysis_name))
+        current = latest_by_key.get(key)
+        if current is None or finished_at > current:
+            latest_by_key[key] = finished_at
+
+    return {key: value.isoformat() for key, value in latest_by_key.items()}
+
+
 def get_bookmarked_accounts() -> List[Dict[str, Any]]:
+    if BOOKMARK_ACCOUNT_IDS:
+        return sb_get(
+            "sns_accounts",
+            {
+                "select": "id,platform,account_name,account_url,last_posts_scraped_at,bookmarks",
+                "id": f"in.({','.join(str(account_id) for account_id in BOOKMARK_ACCOUNT_IDS)})",
+                "order": "id.asc",
+            },
+            range_from=0,
+            range_to=max(len(BOOKMARK_ACCOUNT_IDS) - 1, 0),
+        )
+
     accounts: List[Dict[str, Any]] = []
     offset = 0
     platform_filter = ",".join(BOOKMARK_PLATFORMS)
@@ -315,6 +543,10 @@ def analyze_commenter_quality(account_id: int, platform: str) -> Dict[str, Any]:
     )
 
 
+def aggregate_commenter_quality(account_id: int, platform: str) -> Optional[Dict[str, Any]]:
+    return commenter_quality_aggregate.aggregate_for_account(account_id, platform=platform)
+
+
 def refresh_instagram_posts(account: Dict[str, Any]) -> int:
     trending = load_module("instagram", "ingest_trending_instagram")
 
@@ -494,44 +726,27 @@ def analyze_posts_for_account(account: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def main() -> None:
+    validate_runtime_schema()
     accounts = get_bookmarked_accounts()
     if not accounts:
         print("No bookmarked influencers found.")
         return
 
     account_ids = [int(account["id"]) for account in accounts]
-    average_updated_at = get_average_analysis_updated_at(account_ids)
-    performance_updated_at = get_summary_analysis_updated_at(
-        "influencer_performance_summary",
-        account_ids,
-        {"window": f"eq.{performance_aggregate.WINDOW_LABEL}"},
-    )
-    growth_updated_at = get_summary_analysis_updated_at(
-        "influencer_growth_anomaly_summary",
-        account_ids,
-        {"window_label": f"eq.{growth_anomaly_analyze.WINDOW_LABEL}"},
-    )
-
+    required_analyses = [
+        "growth_anomaly",
+        "post_sponsorship",
+        "post_comment_analysis",
+        "commenter_quality",
+        "account_comment_average",
+        "performance_summary",
+        "commenter_quality_summary",
+    ]
+    latest_runs = get_latest_analysis_run_map(account_ids, required_analyses)
     due_accounts: List[Dict[str, Any]] = []
     for account in accounts:
         account_id = int(account["id"])
-        sponsorship_updated_at = get_recent_post_analysis_updated_at(
-            account_id,
-            "post_sponsorship_analysis",
-            sponsorship_analyze.ANALYSIS_VERSION,
-        )
-        commenter_quality_updated_at = get_recent_post_analysis_updated_at(
-            account_id,
-            "post_commenter_quality_analysis",
-            commenter_quality_analyze.ANALYSIS_VERSION,
-        )
-        freshness_points = (
-            average_updated_at.get(account_id),
-            performance_updated_at.get(account_id),
-            growth_updated_at.get(account_id),
-            sponsorship_updated_at,
-            commenter_quality_updated_at,
-        )
+        freshness_points = tuple(latest_runs.get((account_id, analysis_name)) for analysis_name in required_analyses)
         if any(is_due(updated_at) for updated_at in freshness_points):
             due_accounts.append(account)
 
@@ -549,9 +764,28 @@ def main() -> None:
         platform = str(account.get("platform") or "").strip().lower()
         account_name = str(account.get("account_name") or "").strip()
 
+        refresh_started_at = utcnow_iso()
         try:
             fetched_count = refresh_posts_for_account(account)
+            record_analysis_run(
+                "refresh_posts",
+                account_id,
+                platform,
+                "success",
+                rows_written=fetched_count,
+                details={"account_name": account_name},
+                started_at=refresh_started_at,
+            )
         except Exception as exc:
+            record_analysis_run(
+                "refresh_posts",
+                account_id,
+                platform,
+                "failed",
+                error_message=str(exc),
+                details={"account_name": account_name},
+                started_at=refresh_started_at,
+            )
             print(
                 f"[ERROR] platform={platform} account_id={account_id} account={account_name} "
                 f"step=refresh err={exc}"
@@ -560,31 +794,132 @@ def main() -> None:
             continue
 
         growth_row: Dict[str, Any] = {"analysis_status": "skipped", "events_written": 0, "growth_anomaly_score": None}
+        growth_started_at = utcnow_iso()
         try:
             growth_row = analyze_growth_anomalies(account_id, platform)
+            record_analysis_run(
+                "growth_anomaly",
+                account_id,
+                platform,
+                "success" if growth_row.get("analysis_status") == "ok" else str(growth_row.get("analysis_status") or "success"),
+                rows_written=int(growth_row.get("events_written") or 0),
+                details={"score": growth_row.get("growth_anomaly_score"), "status": growth_row.get("analysis_status")},
+                analysis_version=growth_anomaly_analyze.ANALYSIS_VERSION,
+                started_at=growth_started_at,
+            )
         except Exception as exc:
+            record_analysis_run(
+                "growth_anomaly",
+                account_id,
+                platform,
+                "failed",
+                error_message=str(exc),
+                analysis_version=growth_anomaly_analyze.ANALYSIS_VERSION,
+                started_at=growth_started_at,
+            )
             print(
                 f"[ERROR] platform={platform} account_id={account_id} account={account_name} "
                 f"step=growth_anomaly err={exc}"
             )
 
         sponsorship_summary: Dict[str, Any] = {"posts_analyzed": 0, "sponsored_posts": 0}
+        sponsorship_started_at = utcnow_iso()
         try:
             sponsorship_summary = analyze_sponsorship(account_id, platform)
+            record_analysis_run(
+                "post_sponsorship",
+                account_id,
+                platform,
+                "success",
+                rows_written=int(sponsorship_summary.get("upserted_rows") or sponsorship_summary.get("posts_analyzed") or 0),
+                details={"sponsored_posts": sponsorship_summary.get("sponsored_posts", 0)},
+                analysis_version=sponsorship_analyze.ANALYSIS_VERSION,
+                started_at=sponsorship_started_at,
+            )
         except Exception as exc:
+            record_analysis_run(
+                "post_sponsorship",
+                account_id,
+                platform,
+                "failed",
+                error_message=str(exc),
+                analysis_version=sponsorship_analyze.ANALYSIS_VERSION,
+                started_at=sponsorship_started_at,
+            )
             print(
                 f"[ERROR] platform={platform} account_id={account_id} account={account_name} "
                 f"step=sponsorship err={exc}"
             )
 
+        post_analysis_started_at = utcnow_iso()
         analysis_stats = analyze_posts_for_account(account)
+        record_analysis_run(
+            "post_comment_analysis",
+            account_id,
+            platform,
+            "success" if analysis_stats["posts_failed"] == 0 else "partial",
+            rows_written=int(analysis_stats["posts_processed"]),
+            details={
+                "posts_seen": analysis_stats["posts_seen"],
+                "posts_failed": analysis_stats["posts_failed"],
+                "failed_post_ids": analysis_stats["failed_post_ids"],
+            },
+            started_at=post_analysis_started_at,
+        )
         commenter_quality_summary: Dict[str, Any] = {"posts_analyzed": 0}
+        commenter_quality_started_at = utcnow_iso()
         try:
             commenter_quality_summary = analyze_commenter_quality(account_id, platform)
+            record_analysis_run(
+                "commenter_quality",
+                account_id,
+                platform,
+                "success",
+                rows_written=int(commenter_quality_summary.get("posts_analyzed") or 0),
+                analysis_version=commenter_quality_analyze.ANALYSIS_VERSION,
+                started_at=commenter_quality_started_at,
+            )
         except Exception as exc:
+            record_analysis_run(
+                "commenter_quality",
+                account_id,
+                platform,
+                "failed",
+                error_message=str(exc),
+                analysis_version=commenter_quality_analyze.ANALYSIS_VERSION,
+                started_at=commenter_quality_started_at,
+            )
             print(
                 f"[ERROR] platform={platform} account_id={account_id} account={account_name} "
                 f"step=commenter_quality err={exc}"
+            )
+
+        commenter_quality_account_summary: Optional[Dict[str, Any]] = None
+        commenter_quality_summary_started_at = utcnow_iso()
+        try:
+            commenter_quality_account_summary = aggregate_commenter_quality(account_id, platform)
+            record_analysis_run(
+                "commenter_quality_summary",
+                account_id,
+                platform,
+                "success" if commenter_quality_account_summary else "skipped",
+                rows_written=int(commenter_quality_account_summary.get("posts_used") or 0) if commenter_quality_account_summary else 0,
+                analysis_version=commenter_quality_aggregate.ANALYSIS_VERSION,
+                started_at=commenter_quality_summary_started_at,
+            )
+        except Exception as exc:
+            record_analysis_run(
+                "commenter_quality_summary",
+                account_id,
+                platform,
+                "failed",
+                error_message=str(exc),
+                analysis_version=commenter_quality_aggregate.ANALYSIS_VERSION,
+                started_at=commenter_quality_summary_started_at,
+            )
+            print(
+                f"[ERROR] platform={platform} account_id={account_id} account={account_name} "
+                f"step=commenter_quality_summary err={exc}"
             )
 
         post_success_rate = (
@@ -600,21 +935,69 @@ def main() -> None:
         aggregated_posts = 0
         performance_row: Optional[Dict[str, Any]] = None
         if aggregates_allowed:
+            aggregate_started_at = utcnow_iso()
             try:
                 aggregated_posts = aggregate_account(platform, account_id)
+                record_analysis_run(
+                    "account_comment_average",
+                    account_id,
+                    platform,
+                    "success",
+                    rows_written=aggregated_posts,
+                    started_at=aggregate_started_at,
+                )
             except Exception as exc:
+                record_analysis_run(
+                    "account_comment_average",
+                    account_id,
+                    platform,
+                    "failed",
+                    error_message=str(exc),
+                    started_at=aggregate_started_at,
+                )
                 print(
                     f"[ERROR] platform={platform} account_id={account_id} account={account_name} "
                     f"step=aggregate_account err={exc}"
                 )
+            performance_started_at = utcnow_iso()
             try:
                 performance_row = aggregate_performance(account_id, platform)
+                record_analysis_run(
+                    "performance_summary",
+                    account_id,
+                    platform,
+                    "success" if performance_row else "skipped",
+                    rows_written=int(performance_row.get("posts_used") or 0) if performance_row else 0,
+                    started_at=performance_started_at,
+                )
             except Exception as exc:
+                record_analysis_run(
+                    "performance_summary",
+                    account_id,
+                    platform,
+                    "failed",
+                    error_message=str(exc),
+                    started_at=performance_started_at,
+                )
                 print(
                     f"[ERROR] platform={platform} account_id={account_id} account={account_name} "
                     f"step=aggregate_performance err={exc}"
                 )
         else:
+            record_analysis_run(
+                "account_comment_average",
+                account_id,
+                platform,
+                "skipped",
+                details={"reason": "post_failures", "success_rate": post_success_rate},
+            )
+            record_analysis_run(
+                "performance_summary",
+                account_id,
+                platform,
+                "skipped",
+                details={"reason": "post_failures", "success_rate": post_success_rate},
+            )
             print(
                 f"[SKIP] platform={platform} account_id={account_id} account={account_name} "
                 f"step=aggregates reason=post_failures success_rate={post_success_rate:.2f} "
@@ -639,6 +1022,7 @@ def main() -> None:
             f"sponsored_posts={sponsorship_summary.get('sponsored_posts', 0)} "
             f"posts_seen={analysis_stats['posts_seen']} processed={analysis_stats['posts_processed']} "
             f"failed={analysis_stats['posts_failed']} commenter_quality_posts={commenter_quality_summary.get('posts_analyzed', 0)} "
+            f"commenter_quality_summary_posts={int(commenter_quality_account_summary.get('posts_used') or 0) if commenter_quality_account_summary else 0} "
             f"aggregated_posts={aggregated_posts} performance_score={performance_score}"
         )
 

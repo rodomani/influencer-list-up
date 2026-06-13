@@ -1,4 +1,10 @@
 {
+  "scripts": {
+    "check": "npm run check:frontend && npm run check:python",
+    "check:frontend": "npm --prefix frontend-influencer run lint && npm --prefix frontend-influencer run build",
+    "check:python": "python3 -m compileall -q apify-scrapers",
+    "smoke:bookmarked-refresh": "bash scripts/bookmarked-refresh-smoke.sh"
+  },
   "dependencies": {
     "@supabase/supabase-js": "^2.88.0"
   }

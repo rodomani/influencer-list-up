@@ -1,14 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SearchScreen } from "@/pages/search/search_page";
 import { SearchResultsPage } from "@/pages/search/search_results";
 import { InfluencerDetailPage } from "@/pages/search/influencer_detail";
+import { InfluencerComparePage } from "@/pages/search/influencer_compare";
 import { HomeScreen } from "@/pages/home_page";
 import { CampaignScreen } from "@/pages/campaign/campaign";
 import { CreateCampaignScreen } from "@/pages/campaign/create_campaign";
 import { CampaignDetailScreen } from "@/pages/campaign/campaign_detail";
 import { CampaignEditScreen } from "@/pages/campaign/campaign_edit";
+import { CampaignComparePage } from "@/pages/campaign/campaign_compare";
 import { Routes, Route, useLocation, Navigate } from "react-router-dom";
 import { LoginPage } from "@/pages/authentication/login";
 import { RegisterPage } from "@/pages/authentication/register";
@@ -24,29 +26,45 @@ type LastPaths = {
   bookmark: string;
 };
 
+const DEFAULT_LAST_PATHS: LastPaths = {
+  search: "/search/search",
+  campaign: "/campaign",
+  home: "/home",
+  bookmark: "/bookmark",
+};
+
+function getStoredPath(key: string, fallback: string) {
+  if (typeof window === "undefined") return fallback;
+  return window.localStorage.getItem(key) ?? fallback;
+}
+
 function App() {
   const location = useLocation();
   const isAuthPage =
     location.pathname === "/login" ||
     location.pathname === "/register" ||
     location.pathname === "/verify";
-  const { user, loading } = useAuth();
-  const [lastPaths, setLastPaths] = useState<LastPaths>(() => {
-    if (typeof window === "undefined") {
-      return {
-        search: "/search/search",
-        campaign: "/campaign",
-        home: "/home",
-        bookmark: "/bookmark",
-      };
-    }
-    return {
-      search: window.localStorage.getItem("lastSearchPath") ?? "/search/search",
-      campaign: window.localStorage.getItem("lastCampaignPath") ?? "/campaign",
-      home: window.localStorage.getItem("lastHomePath") ?? "/home",
-      bookmark: window.localStorage.getItem("lastBookmarkPath") ?? "/bookmark",
-    };
-  });
+  const { user, loading, authError } = useAuth();
+  const currentPath = location.pathname + location.search;
+  const lastPaths: LastPaths = {
+    search: location.pathname.startsWith("/search")
+      ? currentPath
+      : getStoredPath("lastSearchPath", DEFAULT_LAST_PATHS.search),
+    campaign: location.pathname.startsWith("/campaign")
+      ? currentPath
+      : getStoredPath("lastCampaignPath", DEFAULT_LAST_PATHS.campaign),
+    home:
+      !location.pathname.startsWith("/search") &&
+      !location.pathname.startsWith("/campaign") &&
+      !location.pathname.startsWith("/bookmark") &&
+      !isAuthPage &&
+      location.pathname !== "/"
+        ? currentPath
+        : getStoredPath("lastHomePath", DEFAULT_LAST_PATHS.home),
+    bookmark: location.pathname.startsWith("/bookmark")
+      ? currentPath
+      : getStoredPath("lastBookmarkPath", DEFAULT_LAST_PATHS.bookmark),
+  };
   const activeItem = location.pathname.startsWith("/search")
     ? "search"
     : location.pathname.startsWith("/campaign")
@@ -60,23 +78,19 @@ function App() {
     if (isAuthPage || location.pathname === "/") return;
     if (!user) return;
     if (location.pathname.startsWith("/search")) {
-      const path = location.pathname + location.search;
-      window.localStorage.setItem("lastSearchPath", path);
-      setLastPaths((prev) => ({ ...prev, search: path }));
+      window.localStorage.setItem("lastSearchPath", currentPath);
     } else if (location.pathname.startsWith("/campaign")) {
-      const path = location.pathname + location.search;
-      window.localStorage.setItem("lastCampaignPath", path);
-      setLastPaths((prev) => ({ ...prev, campaign: path }));
+      window.localStorage.setItem("lastCampaignPath", currentPath);
     } else if (location.pathname.startsWith("/bookmark")) {
-      const path = location.pathname + location.search;
-      window.localStorage.setItem("lastBookmarkPath", path);
-      setLastPaths((prev) => ({ ...prev, bookmark: path }));
+      window.localStorage.setItem("lastBookmarkPath", currentPath);
     } else {
-      const path = location.pathname + location.search;
-      window.localStorage.setItem("lastHomePath", path);
-      setLastPaths((prev) => ({ ...prev, home: path }));
+      window.localStorage.setItem("lastHomePath", currentPath);
     }
-  }, [location]);
+  }, [currentPath, isAuthPage, location.pathname, user]);
+
+  if (location.pathname === "/") {
+    return user ? <Navigate to="/home" replace /> : <LoginPage />;
+  }
 
   if (isAuthPage) {
     if (location.pathname === "/register") return <RegisterPage />;
@@ -86,19 +100,33 @@ function App() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        Loading...
+      <div className="art-shell flex min-h-screen items-center justify-center bg-background px-6 text-foreground">
+        <div className="deco-panel deco-page max-w-md text-center">
+          <div className="deco-kicker">準備中</div>
+          <div className="section-title mt-3 text-2xl">読み込み中</div>
+          <div className="deco-rule my-5" />
+          <p className="deco-copy text-sm">分析データとナビゲーションを整えています。</p>
+        </div>
       </div>
     );
   }
 
   if (!user) {
-    return <Navigate to="/login" replace />;
+    return (
+      <>
+        {authError && (
+          <div className="fixed left-1/2 top-4 z-50 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 border border-red-200 bg-red-50 p-3 text-sm text-red-700 shadow-sm">
+            認証の初期化に失敗しました: {authError}
+          </div>
+        )}
+        <LoginPage />
+      </>
+    );
   }
 
   return (
     <SidebarProvider>
-      <div className="flex min-h-screen bg-background">
+      <div className="flex min-h-screen bg-[#f9fafb] text-slate-950">
         <AppSidebar
           activeItem={activeItem}
           homeUrl={lastPaths.home}
@@ -106,10 +134,10 @@ function App() {
           campaignUrl={lastPaths.campaign}
           bookmarkUrl={lastPaths.bookmark}
         />
-        <div className="flex-1 p-6">
-          <SidebarTrigger className="mb-6" />
+      <div className="min-w-0 w-full max-w-none flex-1 overflow-x-hidden bg-[#f9fafb] px-4 py-5 sm:px-6 lg:px-8">
+        <SidebarTrigger className="mb-6" />
           <Routes>
-            <Route path="/" element={<Navigate to="/login" replace />} />
+            <Route path="/" element={<Navigate to="/home" replace />} />
             <Route path="/home" element={<HomeScreen />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
@@ -122,10 +150,12 @@ function App() {
               path="/search/influencer/:id"
               element={<InfluencerDetailPage />}
             />
+            <Route path="/search/compare" element={<InfluencerComparePage />} />
             <Route path="/campaign" element={<CampaignScreen />} />
             <Route path="/campaign/create" element={<CreateCampaignScreen />} />
             <Route path="/campaign/detail" element={<CampaignDetailScreen />} />
             <Route path="/campaign/edit" element={<CampaignEditScreen />} />
+            <Route path="/campaign/compare" element={<CampaignComparePage />} />
             <Route path="/verify" element={<VerificationPage />} />
             <Route path="/bookmark" element={<Bookmarks />} />
           </Routes>
