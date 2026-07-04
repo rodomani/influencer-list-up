@@ -35,6 +35,16 @@ async function readRequest(req: Request): Promise<RefreshRequest> {
   }
 }
 
+function readBearerToken(req: Request): string {
+  const header = req.headers.get("authorization") ?? req.headers.get("Authorization") ?? ""
+  const match = header.match(/^Bearer\s+(.+)$/i)
+  if (!match) throw new Error("Missing Authorization bearer token")
+  return match[1].trim()
+}
+
+const MAX_REFRESHES_PER_WINDOW = 5
+const REFRESH_WINDOW_MINUTES = 10
+
 export default Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders })
@@ -49,6 +59,7 @@ export default Deno.serve(async (req) => {
     const SERVICE_ROLE_KEY = requireEnv("SUPABASE_SERVICE_ROLE_KEY")
     const WORKER_URL = (Deno.env.get("SINGLE_INFLUENCER_REFRESH_WORKER_URL") ?? "").trim()
     const WORKER_TOKEN = (Deno.env.get("SINGLE_INFLUENCER_REFRESH_WORKER_TOKEN") ?? "").trim()
+    const callerToken = readBearerToken(req)
 
     const body = await readRequest(req)
     const accountId = Number(body.account_id)
@@ -58,6 +69,35 @@ export default Deno.serve(async (req) => {
     const includePosts = body.include_posts !== false
 
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
+    const authClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+      global: { headers: { Authorization: `Bearer ${callerToken}` } },
+    })
+
+    const { data: userResult, error: userError } = await authClient.auth.getUser()
+    if (userError) throw new Error(`Failed to validate caller: ${userError.message}`)
+
+    const caller = userResult.user
+    if (!caller) {
+      return jsonResponse({ ok: false, error: "Authentication required" }, 401)
+    }
+
+    const { data: callerProfile, error: callerProfileError } = await supabase
+      .from("users")
+      .select("id, email_verified")
+      .eq("id", caller.id)
+      .maybeSingle()
+
+    if (callerProfileError) {
+      throw new Error(`Failed to load caller profile: ${callerProfileError.message}`)
+    }
+
+    if (!callerProfile) {
+      return jsonResponse({ ok: false, error: "User profile not found" }, 403)
+    }
+
+    if (!callerProfile.email_verified) {
+      return jsonResponse({ ok: false, error: "Email verification required" }, 403)
+    }
 
     const { data: account, error: accountError } = await supabase
       .from("sns_accounts")
@@ -69,6 +109,39 @@ export default Deno.serve(async (req) => {
     if (!account) throw new Error(`sns_accounts row not found for id=${accountId}`)
 
     const startedAt = new Date().toISOString()
+    const recentWindowStart = new Date(Date.now() - REFRESH_WINDOW_MINUTES * 60 * 1000).toISOString()
+
+    const { data: recentJobs, error: recentJobsError } = await supabase
+      .from("analysis_job_runs")
+      .select("id, details, created_at")
+      .eq("analysis_name", "single_influencer_refresh")
+      .gte("created_at", recentWindowStart)
+      .order("created_at", { ascending: false })
+
+    if (recentJobsError) {
+      throw new Error(`analysis_job_runs rate limit check failed: ${recentJobsError.message}`)
+    }
+
+    const recentCallerRequests = (recentJobs ?? []).filter((job) => {
+      const requestedBy =
+        job.details &&
+        typeof job.details === "object" &&
+        "requested_by_user_id" in job.details
+          ? job.details.requested_by_user_id
+          : null
+      return requestedBy === caller.id
+    })
+
+    if (recentCallerRequests.length >= MAX_REFRESHES_PER_WINDOW) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "Refresh request limit exceeded",
+          message: `${REFRESH_WINDOW_MINUTES}分あたりの更新回数上限に達しました。少し待ってから再試行してください。`,
+        },
+        429
+      )
+    }
 
     const { data: activeJob, error: activeJobError } = await supabase
       .from("analysis_job_runs")
@@ -122,7 +195,12 @@ export default Deno.serve(async (req) => {
           platform: account.platform,
           status: "failed",
           error_message: workerText.slice(0, 1000),
-          details: { include_posts: includePosts, source: "edge-function-worker", retry_count: 0 },
+          details: {
+            include_posts: includePosts,
+            source: "edge-function-worker",
+            retry_count: 0,
+            requested_by_user_id: caller.id,
+          },
           analysis_version: "v1",
           started_at: startedAt,
           finished_at: new Date().toISOString(),
@@ -149,11 +227,11 @@ export default Deno.serve(async (req) => {
         retry_count: 0,
         account_name: account.account_name,
         source: "edge-function-queue",
+        requested_by_user_id: caller.id,
         note: "Run apify-scrapers/single_influencer_refresh.py for this account_id from a backend worker.",
       },
       analysis_version: "v1",
       started_at: startedAt,
-      finished_at: startedAt,
     })
 
     return jsonResponse({

@@ -24,7 +24,8 @@ export type InfluencerRowFromDB = {
   keywords: string | null;
   profile_image_url: string | null;
   accounts_metrics?: MetricsRow[] | null;
-  bookmarks: string[] | null;
+  hasUserBookmark: boolean;
+  bookmarkId?: number;
 };
 
 export type InfluencerNormalized = {
@@ -35,11 +36,12 @@ export type InfluencerNormalized = {
   gender: string | null;
   keywords: string | null;
   accounts_metrics: MetricsRow | null;
-  bookmarks: string[];
+  hasUserBookmark: boolean;
+  bookmarkId?: number;
   latest_posted_at?: string | null;
   latest_activity_at?: string | null;
-  first_posted_at?: string | null;
   posting_span_days?: number;
+  bookmark_count?: number;
 };
 
 export type PostActivityRow = {
@@ -49,9 +51,8 @@ export type PostActivityRow = {
 };
 
 export type CampaignOption = {
-  id: string;
-  name: string;
-  influencers: string | null;
+  id: number | string;
+  name: string | null;
 };
 
 export type CampaignTargetInfluencer = {

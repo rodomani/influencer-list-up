@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js"
+import { handleCors, jsonResponse, jsonHeaders, readBearerToken } from "../_shared/http.ts"
 
 type IgMe = {
   user_id?: string
@@ -131,11 +132,11 @@ type SyncRequestBody = {
 
 export default Deno.serve(async (req) => {
   try {
+    const corsResponse = handleCors(req)
+    if (corsResponse) return corsResponse
+
     if (req.method !== "POST") {
-      return new Response(JSON.stringify({ ok: false, error: "Use POST" }), {
-        status: 405,
-        headers: { "content-type": "application/json" },
-      })
+      return jsonResponse({ ok: false, error: "Use POST" }, 405)
     }
 
     // ✅ Read profile_id (uuid) from request body
@@ -150,15 +151,11 @@ export default Deno.serve(async (req) => {
 
     const SUPABASE_URL = requireEnv("SUPABASE_URL")
     const SERVICE_ROLE_KEY = requireEnv("SUPABASE_SERVICE_ROLE_KEY")
+    const callerToken = readBearerToken(req)
 
     // ✅ Instagram Login token for graph.instagram.com
     const IG_ACCESS_TOKEN = normalizeToken(requireEnv("IG_ACCESS_TOKEN"))
 
-    console.log("IG token fingerprint", {
-      len: IG_ACCESS_TOKEN.length,
-      head: IG_ACCESS_TOKEN.slice(0, 12),
-      tail: IG_ACCESS_TOKEN.slice(-12),
-    })
     console.log("Sync request", { profileId })
 
     const IG_PLATFORM = Deno.env.get("IG_PLATFORM") ?? "instagram"
@@ -168,6 +165,21 @@ export default Deno.serve(async (req) => {
       "https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y"
 
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
+    const authClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+      global: { headers: { Authorization: `Bearer ${callerToken}` } },
+    })
+
+    const { data: userResult, error: userError } = await authClient.auth.getUser()
+    if (userError) throw new Error(`Failed to validate caller: ${userError.message}`)
+
+    const caller = userResult.user
+    if (!caller) throw new Error("Authentication required")
+    if (caller.id !== profileId) {
+      return new Response(
+        JSON.stringify({ ok: false, error: "You can only sync your own Instagram account." }),
+        { status: 403, headers: jsonHeaders }
+      )
+    }
 
     const nowIso = new Date().toISOString()
     const today = nowIso.slice(0, 10)
@@ -215,11 +227,7 @@ export default Deno.serve(async (req) => {
 
           updated_at: nowIso,
         },
-        // ✅ IMPORTANT: This must match your UNIQUE index/constraint in DB.
-        // If you created unique(profile_id, platform), keep this:
-        { onConflict: "profile_id,platform" }
-        // If instead you created unique(platform, platform_profile_id), use:
-        // { onConflict: "platform,platform_profile_id" }
+        { onConflict: "platform,platform_profile_id" }
       )
       .select("id")
       .single()
@@ -241,7 +249,7 @@ export default Deno.serve(async (req) => {
       profileViews = null
     }
 
-    const { error: amErr } = await supabase.from("accounts_metrics").insert({
+    const { error: amErr } = await supabase.from("accounts_metrics").upsert({
       account_id: accountId,
       posts: me.media_count ?? null,
       followers: me.followers_count ?? null,
@@ -251,24 +259,18 @@ export default Deno.serve(async (req) => {
       metric_date: today,
       created_at: nowIso,
       maximum_likes: null,
-    } as any)
+    }, { onConflict: "account_id,metric_date" })
 
     if (amErr) throw new Error(`accounts_metrics insert failed: ${amErr.message}`)
 
-    return new Response(
-      JSON.stringify({
-        ok: true,
-        accountId,
-        profile_id: profileId,
-        platform: IG_PLATFORM,
-        platform_profile_id: igPlatformProfileId,
-      }),
-      { headers: { "content-type": "application/json" } }
-    )
-  } catch (e) {
-    return new Response(JSON.stringify({ ok: false, error: String(e) }), {
-      status: 400,
-      headers: { "content-type": "application/json" },
+    return jsonResponse({
+      ok: true,
+      accountId,
+      profile_id: profileId,
+      platform: IG_PLATFORM,
+      platform_profile_id: igPlatformProfileId,
     })
+  } catch (e) {
+    return jsonResponse({ ok: false, error: String(e) }, 400)
   }
 })

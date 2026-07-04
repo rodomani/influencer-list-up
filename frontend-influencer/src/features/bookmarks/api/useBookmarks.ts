@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useReducer } from "react";
 import type {
   BookmarkContactInfo,
   BookmarkedInfluencer,
@@ -43,74 +43,407 @@ import {
   setBookmarkRating,
 } from "./bookmarkQueries";
 
+type BookmarkOption = { id: number; name: string };
+
+type BookmarkState = {
+  influencers: BookmarkedInfluencer[];
+  folders: BookmarkOption[];
+  tags: BookmarkOption[];
+  selectedFolderId: number | "all";
+  selectedTagId: number | "all";
+  selectedPriority: BookmarkPriorityValue | "all";
+  selectedReadiness: BookmarkReadinessValue | "all";
+  selectedRiskLevel: BookmarkRiskLevelValue | "all";
+  selectedRating: BookmarkRatingValue | "all";
+  loading: boolean;
+  error: string | null;
+  folderError: string | null;
+  tagError: string | null;
+  priorityError: string | null;
+  readinessError: string | null;
+  riskError: string | null;
+  priceError: string | null;
+  contactError: string | null;
+  snapshotError: string | null;
+  researchChecklistError: string | null;
+  memoError: string | null;
+  sourceError: string | null;
+  ratingError: string | null;
+  folderPersistenceReady: boolean;
+  tagPersistenceReady: boolean;
+  userBookmarkPersistenceReady: boolean;
+  creatingFolder: boolean;
+  creatingTag: boolean;
+  updatingFolderAssignment: string | null;
+  updatingTagAssignment: string | null;
+  updatingPriorityId: number | null;
+  updatingReadinessId: number | null;
+  updatingRiskId: number | null;
+  updatingPriceId: number | null;
+  updatingContactId: number | null;
+  updatingSnapshotId: number | null;
+  updatingResearchChecklistId: number | null;
+  updatingMemoId: number | null;
+  updatingRatingId: number | null;
+};
+
+type BookmarkAction =
+  | { type: "merge"; patch: Partial<BookmarkState> }
+  | { type: "resetForSignedOut" }
+  | { type: "setInfluencers"; influencers: BookmarkedInfluencer[] }
+  | {
+      type: "updateInfluencers";
+      updater: (influencers: BookmarkedInfluencer[]) => BookmarkedInfluencer[];
+    };
+
+const initialBookmarkState: BookmarkState = {
+  influencers: [],
+  folders: [],
+  tags: [],
+  selectedFolderId: "all",
+  selectedTagId: "all",
+  selectedPriority: "all",
+  selectedReadiness: "all",
+  selectedRiskLevel: "all",
+  selectedRating: "all",
+  loading: true,
+  error: null,
+  folderError: null,
+  tagError: null,
+  priorityError: null,
+  readinessError: null,
+  riskError: null,
+  priceError: null,
+  contactError: null,
+  snapshotError: null,
+  researchChecklistError: null,
+  memoError: null,
+  sourceError: null,
+  ratingError: null,
+  folderPersistenceReady: true,
+  tagPersistenceReady: true,
+  userBookmarkPersistenceReady: true,
+  creatingFolder: false,
+  creatingTag: false,
+  updatingFolderAssignment: null,
+  updatingTagAssignment: null,
+  updatingPriorityId: null,
+  updatingReadinessId: null,
+  updatingRiskId: null,
+  updatingPriceId: null,
+  updatingContactId: null,
+  updatingSnapshotId: null,
+  updatingResearchChecklistId: null,
+  updatingMemoId: null,
+  updatingRatingId: null,
+};
+
+const bookmarkFeatureErrorReset: Partial<BookmarkState> = {
+  error: null,
+  folderError: null,
+  tagError: null,
+  priorityError: null,
+  readinessError: null,
+  riskError: null,
+  priceError: null,
+  contactError: null,
+  snapshotError: null,
+  researchChecklistError: null,
+  memoError: null,
+  sourceError: null,
+  ratingError: null,
+};
+
+const replaceInfluencerRow = (
+  influencers: BookmarkedInfluencer[],
+  influencerId: number,
+  updater: (influencer: BookmarkedInfluencer) => BookmarkedInfluencer
+) =>
+  influencers.map((influencer) =>
+    influencer.id === influencerId ? updater(influencer) : influencer
+  );
+
+const findInfluencerSnapshot = (
+  influencers: BookmarkedInfluencer[],
+  influencerId: number
+) => influencers.find((influencer) => influencer.id === influencerId) ?? null;
+
+const bookmarksReducer = (state: BookmarkState, action: BookmarkAction): BookmarkState => {
+  switch (action.type) {
+    case "merge":
+      return { ...state, ...action.patch };
+    case "resetForSignedOut":
+      return {
+        ...initialBookmarkState,
+        loading: false,
+      };
+    case "setInfluencers":
+      return {
+        ...state,
+        influencers: action.influencers,
+      };
+    case "updateInfluencers":
+      return {
+        ...state,
+        influencers: action.updater(state.influencers),
+      };
+    default:
+      return state;
+  }
+};
+
 export const useBookmarks = (userId: string | undefined) => {
-  const [influencers, setInfluencers] = useState<BookmarkedInfluencer[]>([]);
-  const [folders, setFolders] = useState<{ id: number; name: string }[]>([]);
-  const [tags, setTags] = useState<{ id: number; name: string }[]>([]);
-  const [selectedFolderId, setSelectedFolderId] = useState<number | "all">("all");
-  const [selectedTagId, setSelectedTagId] = useState<number | "all">("all");
-  const [selectedPriority, setSelectedPriority] = useState<BookmarkPriorityValue | "all">("all");
-  const [selectedReadiness, setSelectedReadiness] = useState<BookmarkReadinessValue | "all">("all");
-  const [selectedRiskLevel, setSelectedRiskLevel] = useState<BookmarkRiskLevelValue | "all">("all");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [folderError, setFolderError] = useState<string | null>(null);
-  const [tagError, setTagError] = useState<string | null>(null);
-  const [priorityError, setPriorityError] = useState<string | null>(null);
-  const [readinessError, setReadinessError] = useState<string | null>(null);
-  const [riskError, setRiskError] = useState<string | null>(null);
-  const [priceError, setPriceError] = useState<string | null>(null);
-  const [contactError, setContactError] = useState<string | null>(null);
-  const [snapshotError, setSnapshotError] = useState<string | null>(null);
-  const [researchChecklistError, setResearchChecklistError] = useState<string | null>(null);
-  const [memoError, setMemoError] = useState<string | null>(null);
-  const [sourceError, setSourceError] = useState<string | null>(null);
-  const [folderPersistenceReady, setFolderPersistenceReady] = useState(true);
-  const [tagPersistenceReady, setTagPersistenceReady] = useState(true);
-  const [priorityPersistenceReady, setPriorityPersistenceReady] = useState(true);
-  const [readinessPersistenceReady, setReadinessPersistenceReady] = useState(true);
-  const [riskPersistenceReady, setRiskPersistenceReady] = useState(true);
-  const [pricePersistenceReady, setPricePersistenceReady] = useState(true);
-  const [contactPersistenceReady, setContactPersistenceReady] = useState(true);
-  const [snapshotPersistenceReady, setSnapshotPersistenceReady] = useState(true);
-  const [researchChecklistPersistenceReady, setResearchChecklistPersistenceReady] = useState(true);
-  const [memoPersistenceReady, setMemoPersistenceReady] = useState(true);
-  const [sourcePersistenceReady, setSourcePersistenceReady] = useState(true);
-  const [creatingFolder, setCreatingFolder] = useState(false);
-  const [creatingTag, setCreatingTag] = useState(false);
-  const [updatingFolderAssignment, setUpdatingFolderAssignment] = useState<string | null>(null);
-  const [updatingTagAssignment, setUpdatingTagAssignment] = useState<string | null>(null);
-  const [updatingPriorityId, setUpdatingPriorityId] = useState<number | null>(null);
-  const [updatingReadinessId, setUpdatingReadinessId] = useState<number | null>(null);
-  const [updatingRiskId, setUpdatingRiskId] = useState<number | null>(null);
-  const [updatingPriceId, setUpdatingPriceId] = useState<number | null>(null);
-  const [updatingContactId, setUpdatingContactId] = useState<number | null>(null);
-  const [updatingSnapshotId, setUpdatingSnapshotId] = useState<number | null>(null);
-  const [updatingResearchChecklistId, setUpdatingResearchChecklistId] = useState<number | null>(null);
-  const [updatingMemoId, setUpdatingMemoId] = useState<number | null>(null);
-  const [selectedRating, setSelectedRating] = useState<BookmarkRatingValue | "all">("all");
-  const [ratingError, setRatingError] = useState<string | null>(null);
-  const [ratingPersistenceReady, setRatingPersistenceReady] = useState(true);
-  const [updatingRatingId, setUpdatingRatingId] = useState<number | null>(null);
+  const [state, dispatch] = useReducer(bookmarksReducer, initialBookmarkState);
+  const setState = (patch: Partial<BookmarkState>) => dispatch({ type: "merge", patch });
+  const setInfluencers = (
+    influencers:
+      | BookmarkedInfluencer[]
+      | ((prev: BookmarkedInfluencer[]) => BookmarkedInfluencer[])
+  ) =>
+    typeof influencers === "function"
+      ? dispatch({ type: "updateInfluencers", updater: influencers })
+      : dispatch({ type: "setInfluencers", influencers });
+  const {
+    influencers,
+    folders,
+    tags,
+    selectedFolderId,
+    selectedTagId,
+    selectedPriority,
+    selectedReadiness,
+    selectedRiskLevel,
+    selectedRating,
+    loading,
+    error,
+    folderError,
+    tagError,
+    priorityError,
+    readinessError,
+    riskError,
+    priceError,
+    contactError,
+    snapshotError,
+    researchChecklistError,
+    memoError,
+    sourceError,
+    ratingError,
+    folderPersistenceReady,
+    tagPersistenceReady,
+    userBookmarkPersistenceReady,
+    creatingFolder,
+    creatingTag,
+    updatingFolderAssignment,
+    updatingTagAssignment,
+    updatingPriorityId,
+    updatingReadinessId,
+    updatingRiskId,
+    updatingPriceId,
+    updatingContactId,
+    updatingSnapshotId,
+    updatingResearchChecklistId,
+    updatingMemoId,
+    updatingRatingId,
+  } = state;
+  const setFolders = (next: BookmarkOption[] | ((prev: BookmarkOption[]) => BookmarkOption[])) =>
+    setState({ folders: typeof next === "function" ? next(folders) : next });
+  const setTags = (next: BookmarkOption[] | ((prev: BookmarkOption[]) => BookmarkOption[])) =>
+    setState({ tags: typeof next === "function" ? next(tags) : next });
+  const setFilters = (
+    patch: Partial<
+      Pick<
+        BookmarkState,
+        | "selectedFolderId"
+        | "selectedTagId"
+        | "selectedPriority"
+        | "selectedReadiness"
+        | "selectedRiskLevel"
+        | "selectedRating"
+      >
+    >
+  ) => setState(patch);
+  const setFeatureErrors = (
+    patch: Partial<
+      Pick<
+        BookmarkState,
+        | "error"
+        | "folderError"
+        | "tagError"
+        | "priorityError"
+        | "readinessError"
+        | "riskError"
+        | "priceError"
+        | "contactError"
+        | "snapshotError"
+        | "researchChecklistError"
+        | "memoError"
+        | "sourceError"
+        | "ratingError"
+      >
+    >
+  ) => setState(patch);
+  const setPending = (
+    patch: Partial<
+      Pick<
+        BookmarkState,
+        | "creatingFolder"
+        | "creatingTag"
+        | "updatingFolderAssignment"
+        | "updatingTagAssignment"
+        | "updatingPriorityId"
+        | "updatingReadinessId"
+        | "updatingRiskId"
+        | "updatingPriceId"
+        | "updatingContactId"
+        | "updatingSnapshotId"
+        | "updatingResearchChecklistId"
+        | "updatingMemoId"
+        | "updatingRatingId"
+      >
+    >
+  ) => setState(patch);
+  const setSelectedFolderId = (value: number | "all") => setFilters({ selectedFolderId: value });
+  const setSelectedTagId = (value: number | "all") => setFilters({ selectedTagId: value });
+  const setSelectedPriority = (value: BookmarkPriorityValue | "all") =>
+    setFilters({ selectedPriority: value });
+  const setSelectedReadiness = (value: BookmarkReadinessValue | "all") =>
+    setFilters({ selectedReadiness: value });
+  const setSelectedRiskLevel = (value: BookmarkRiskLevelValue | "all") =>
+    setFilters({ selectedRiskLevel: value });
+  const setSelectedRating = (value: BookmarkRatingValue | "all") =>
+    setFilters({ selectedRating: value });
+
+  const updateSingleInfluencer = (
+    influencerId: number,
+    updater: (influencer: BookmarkedInfluencer) => BookmarkedInfluencer
+  ) => {
+    setInfluencers((prev) => replaceInfluencerRow(prev, influencerId, updater));
+  };
+
+  const createNamedBookmarkEntity = async ({
+    name,
+    creatingKey,
+    persistenceReady,
+    emptyMessage,
+    persistenceMessage,
+    createEntity,
+    onSuccess,
+    errorKey,
+  }: {
+    name: string;
+    creatingKey: "creatingFolder" | "creatingTag";
+    persistenceReady: boolean;
+    emptyMessage: string;
+    persistenceMessage: string;
+    createEntity: (trimmedName: string) => Promise<{ id: number; name: string }>;
+    onSuccess: (entity: { id: number; name: string }) => void;
+    errorKey: "folderError" | "tagError";
+  }) => {
+    if (!userId) return false;
+
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      setFeatureErrors({ [errorKey]: emptyMessage } as Partial<BookmarkState>);
+      return false;
+    }
+
+    if (!persistenceReady) {
+      setFeatureErrors({ [errorKey]: persistenceMessage } as Partial<BookmarkState>);
+      return false;
+    }
+
+    setPending({ [creatingKey]: true } as Partial<BookmarkState>);
+    setFeatureErrors({ [errorKey]: null } as Partial<BookmarkState>);
+
+    try {
+      const created = await createEntity(trimmedName);
+      onSuccess(created);
+      return true;
+    } catch (createError) {
+      setFeatureErrors({
+        [errorKey]: createError instanceof Error ? createError.message : String(createError),
+      } as Partial<BookmarkState>);
+      return false;
+    } finally {
+      setPending({ [creatingKey]: false } as Partial<BookmarkState>);
+    }
+  };
+
+  const toggleBookmarkAssignment = async ({
+    influencer,
+    entityId,
+    entityType,
+    persistenceReady,
+    persistenceMessage,
+    addAssignment,
+    removeAssignment,
+  }: {
+    influencer: BookmarkedInfluencer;
+    entityId: number;
+    entityType: "folder" | "tag";
+    persistenceReady: boolean;
+    persistenceMessage: string;
+    addAssignment: () => Promise<void>;
+    removeAssignment: () => Promise<void>;
+  }) => {
+    if (!userId) return;
+
+    if (!persistenceReady) {
+      setFeatureErrors({
+        [entityType === "folder" ? "folderError" : "tagError"]: persistenceMessage,
+      } as Partial<BookmarkState>);
+      return;
+    }
+
+    const assignmentKey = `${influencer.id}-${entityId}`;
+    const assignmentField = entityType === "folder" ? "folderIds" : "tagIds";
+    const errorKey = entityType === "folder" ? "folderError" : "tagError";
+    const pendingKey =
+      entityType === "folder" ? "updatingFolderAssignment" : "updatingTagAssignment";
+    const alreadyAssigned = influencer[assignmentField].includes(entityId);
+    const previousRow = findInfluencerSnapshot(influencers, influencer.id);
+
+    setPending({ [pendingKey]: assignmentKey } as Partial<BookmarkState>);
+    setFeatureErrors({ [errorKey]: null } as Partial<BookmarkState>);
+
+    updateSingleInfluencer(influencer.id, (row) => ({
+      ...row,
+      [assignmentField]: alreadyAssigned
+        ? row[assignmentField].filter((id) => id !== entityId)
+        : [...row[assignmentField], entityId],
+    }));
+
+    try {
+      if (alreadyAssigned) {
+        await removeAssignment();
+      } else {
+        await addAssignment();
+      }
+    } catch (assignmentError) {
+      if (previousRow) {
+        updateSingleInfluencer(influencer.id, () => previousRow);
+      }
+      setFeatureErrors({
+        [errorKey]:
+          assignmentError instanceof Error ? assignmentError.message : String(assignmentError),
+      } as Partial<BookmarkState>);
+    } finally {
+      setPending({ [pendingKey]: null } as Partial<BookmarkState>);
+    }
+  };
 
   useEffect(() => {
+    let cancelled = false;
+
     const loadBookmarks = async () => {
       if (!userId) {
-        setInfluencers([]);
-        setFolders([]);
-        setTags([]);
-        setSelectedFolderId("all");
-        setSelectedTagId("all");
-        setSelectedPriority("all");
-        setSelectedReadiness("all");
-        setSelectedRiskLevel("all");
-        setSelectedRating("all");
-        setLoading(false);
+        dispatch({ type: "resetForSignedOut" });
         return;
       }
 
-      setLoading(true);
-      setError(null);
+      setState({
+        loading: true,
+        ...bookmarkFeatureErrorReset,
+      });
 
       try {
         const bookmarkedInfluencers = await fetchBookmarkedInfluencers(userId);
@@ -157,6 +490,9 @@ export const useBookmarks = (userId: string | undefined) => {
             accountIds,
           }),
         ]);
+
+        if (cancelled) return;
+
         const folderIdsByAccount = new Map<number, number[]>();
         const tagIdsByAccount = new Map<number, number[]>();
         const priorityByAccount = new Map<number, BookmarkPriorityValue>();
@@ -201,79 +537,87 @@ export const useBookmarks = (userId: string | undefined) => {
           sourceByAccount.set(item.account_id, item);
         });
 
-        setInfluencers(
-          bookmarkedInfluencers.map((influencer) => ({
-            ...influencer,
-            folderIds: folderIdsByAccount.get(influencer.id) ?? [],
-            tagIds: tagIdsByAccount.get(influencer.id) ?? [],
-            priority: priorityByAccount.get(influencer.id) ?? null,
-            candidateReadiness:
-              readinessByAccount.get(influencer.id) ?? influencer.candidateReadiness,
-            riskLevel: riskLevelByAccount.get(influencer.id) ?? influencer.riskLevel,
-            riskNotes: riskNotesByAccount.get(influencer.id) ?? influencer.riskNotes,
-            whySavedMemo: memoByAccount.get(influencer.id) ?? "",
-            savedSource: sourceByAccount.get(influencer.id) ?? null,
-          }))
-        );
-        setFolders(folderResult.folders.map((folder) => ({ id: folder.id, name: folder.name })));
-        setTags(tagResult.tags.map((tag) => ({ id: tag.id, name: tag.name })));
-        setFolderPersistenceReady(folderResult.persistenceReady && folderItemResult.persistenceReady);
-        setTagPersistenceReady(tagResult.persistenceReady && tagItemResult.persistenceReady);
-        setPriorityPersistenceReady(priorityResult.persistenceReady);
-        setReadinessPersistenceReady(readinessResult.persistenceReady);
-        setRiskPersistenceReady(riskResult.persistenceReady);
-        setPricePersistenceReady(riskResult.persistenceReady);
-        setContactPersistenceReady(riskResult.persistenceReady);
-        setSnapshotPersistenceReady(priorityResult.persistenceReady);
-        setResearchChecklistPersistenceReady(priorityResult.persistenceReady);
-        setMemoPersistenceReady(memoResult.persistenceReady);
-        setSourcePersistenceReady(sourceResult.persistenceReady);
-        setRatingPersistenceReady(priorityResult.persistenceReady);
-        if (!folderResult.persistenceReady || !folderItemResult.persistenceReady) {
-          setFolderError("フォルダーを保存するには、bookmark_folders のマイグレーションをSupabaseへ反映してください。");
-        }
-        if (!tagResult.persistenceReady || !tagItemResult.persistenceReady) {
-          setTagError("タグを保存するには、bookmark_tags のマイグレーションをSupabaseへ反映してください。");
-        }
-        if (!priorityResult.persistenceReady) {
-          setPriorityError("優先度を保存するには、user_bookmarks の priority カラムをSupabaseへ反映してください。");
-        }
-        if (!readinessResult.persistenceReady) {
-          setReadinessError("候補状況を使うには、user_bookmarks の candidate_readiness カラムをSupabaseへ反映してください。");
-        }
-        if (!riskResult.persistenceReady) {
-          setRiskError("リスク情報を使うには、user_bookmarks の risk_level / risk_notes カラムをSupabaseへ反映してください。");
-        }
-        if (!riskResult.persistenceReady) {
-          setPriceError("価格メモを使うには、user_bookmarks の estimated_price_min / estimated_price_max / price_note / price_checked_at カラムをSupabaseへ反映してください。");
-        }
-        if (!riskResult.persistenceReady) {
-          setContactError("連絡先ボールトを使うには、user_bookmarks の contact_info カラムをSupabaseへ反映してください。");
-        }
-        if (!priorityResult.persistenceReady) {
-          setSnapshotError("保存時スナップショットを使うには、user_bookmarks の saved_snapshot カラムをSupabaseへ反映してください。");
-        }
-        if (!priorityResult.persistenceReady) {
-          setResearchChecklistError("チェックリストを使うには、user_bookmarks の research_checklist カラムをSupabaseへ反映してください。");
-        }
-        if (!memoResult.persistenceReady) {
-          setMemoError("保存理由メモを使うには、user_bookmarks の saved_reason カラムをSupabaseへ反映してください。");
-        }
-        if (!sourceResult.persistenceReady) {
-          setSourceError("保存元を記録するには、user_bookmarks の saved_source / saved_source_detail カラムをSupabaseへ反映してください。");
-        }
-        if (!priorityResult.persistenceReady) {
-          setRatingError("候補評価を使うには、user_bookmarks の personal_rating カラムをSupabaseへ反映してください。");
-        }
+        const nextInfluencers = bookmarkedInfluencers.map((influencer) => ({
+          ...influencer,
+          folderIds: folderIdsByAccount.get(influencer.id) ?? [],
+          tagIds: tagIdsByAccount.get(influencer.id) ?? [],
+          priority: priorityByAccount.get(influencer.id) ?? null,
+          candidateReadiness:
+            readinessByAccount.get(influencer.id) ?? influencer.candidateReadiness,
+          riskLevel: riskLevelByAccount.get(influencer.id) ?? influencer.riskLevel,
+          riskNotes: riskNotesByAccount.get(influencer.id) ?? influencer.riskNotes,
+          whySavedMemo: memoByAccount.get(influencer.id) ?? "",
+          savedSource: sourceByAccount.get(influencer.id) ?? null,
+        }));
+        const folderPersistenceReady = folderResult.persistenceReady && folderItemResult.persistenceReady;
+        const tagPersistenceReady = tagResult.persistenceReady && tagItemResult.persistenceReady;
+        const userBookmarkPersistenceReady =
+          priorityResult.persistenceReady &&
+          readinessResult.persistenceReady &&
+          riskResult.persistenceReady &&
+          memoResult.persistenceReady &&
+          sourceResult.persistenceReady;
+
+        setState({
+          loading: false,
+          influencers: nextInfluencers,
+          folders: folderResult.folders.map((folder) => ({ id: folder.id, name: folder.name })),
+          tags: tagResult.tags.map((tag) => ({ id: tag.id, name: tag.name })),
+          folderPersistenceReady,
+          tagPersistenceReady,
+          userBookmarkPersistenceReady,
+          folderError: folderPersistenceReady
+            ? null
+            : "フォルダーを保存するには、bookmark_folders のマイグレーションをSupabaseへ反映してください。",
+          tagError: tagPersistenceReady
+            ? null
+            : "タグを保存するには、bookmark_tags のマイグレーションをSupabaseへ反映してください。",
+          priorityError: userBookmarkPersistenceReady
+            ? null
+            : "優先度を保存するには、user_bookmarks の priority カラムをSupabaseへ反映してください。",
+          readinessError: userBookmarkPersistenceReady
+            ? null
+            : "候補状況を使うには、user_bookmarks の candidate_readiness カラムをSupabaseへ反映してください。",
+          riskError: userBookmarkPersistenceReady
+            ? null
+            : "リスク情報を使うには、user_bookmarks の risk_level / risk_notes カラムをSupabaseへ反映してください。",
+          priceError: userBookmarkPersistenceReady
+            ? null
+            : "価格メモを使うには、user_bookmarks の estimated_price_min / estimated_price_max / price_note / price_checked_at カラムをSupabaseへ反映してください。",
+          contactError: userBookmarkPersistenceReady
+            ? null
+            : "連絡先ボールトを使うには、user_bookmarks の contact_info カラムをSupabaseへ反映してください。",
+          snapshotError: userBookmarkPersistenceReady
+            ? null
+            : "保存時スナップショットを使うには、user_bookmarks の saved_snapshot カラムをSupabaseへ反映してください。",
+          researchChecklistError: userBookmarkPersistenceReady
+            ? null
+            : "チェックリストを使うには、user_bookmarks の research_checklist カラムをSupabaseへ反映してください。",
+          memoError: userBookmarkPersistenceReady
+            ? null
+            : "保存理由メモを使うには、user_bookmarks の saved_reason カラムをSupabaseへ反映してください。",
+          sourceError: userBookmarkPersistenceReady
+            ? null
+            : "保存元を記録するには、user_bookmarks の saved_source / saved_source_detail カラムをSupabaseへ反映してください。",
+          ratingError: userBookmarkPersistenceReady
+            ? null
+            : "候補評価を使うには、user_bookmarks の personal_rating カラムをSupabaseへ反映してください。",
+        });
       } catch (bookmarkError) {
-        setInfluencers([]);
-        setError(bookmarkError instanceof Error ? bookmarkError.message : String(bookmarkError));
-      } finally {
-        setLoading(false);
+        if (cancelled) return;
+        setState({
+          loading: false,
+          influencers: [],
+          error: bookmarkError instanceof Error ? bookmarkError.message : String(bookmarkError),
+        });
       }
     };
 
     loadBookmarks();
+
+    return () => {
+      cancelled = true;
+    };
   }, [userId]);
 
   const handleRatingChange = async ({
@@ -285,21 +629,19 @@ export const useBookmarks = (userId: string | undefined) => {
   }) => {
     if (!userId) return;
 
-    if (!ratingPersistenceReady) {
-      setRatingError("候補評価を使うには、user_bookmarks の personal_rating カラムをSupabaseへ反映してください。");
+    if (!userBookmarkPersistenceReady) {
+      setFeatureErrors({
+        ratingError:
+          "候補評価を使うには、user_bookmarks の personal_rating カラムをSupabaseへ反映してください。",
+      });
       return;
     }
-  
-    const previousInfluencers = influencers;
-    setUpdatingRatingId(influencer.id);
-    setRatingError(null);
-  
-    setInfluencers((prev) =>
-      prev.map((row) =>
-        row.id === influencer.id ? { ...row, personalRating: rating } : row
-      )
-    );
-  
+
+    const previousRow = findInfluencerSnapshot(influencers, influencer.id);
+    setPending({ updatingRatingId: influencer.id });
+    setFeatureErrors({ ratingError: null });
+    updateSingleInfluencer(influencer.id, (row) => ({ ...row, personalRating: rating }));
+
     try {
       if (rating) {
         await setBookmarkRating({
@@ -314,10 +656,12 @@ export const useBookmarks = (userId: string | undefined) => {
         });
       }
     } catch (error) {
-      setInfluencers(previousInfluencers);
-      setRatingError(error instanceof Error ? error.message : String(error));
+      if (previousRow) {
+        updateSingleInfluencer(influencer.id, () => previousRow);
+      }
+      setFeatureErrors({ ratingError: error instanceof Error ? error.message : String(error) });
     } finally {
-      setUpdatingRatingId(null);
+      setPending({ updatingRatingId: null });
     }
   };
 
@@ -330,19 +674,18 @@ export const useBookmarks = (userId: string | undefined) => {
   }) => {
     if (!userId) return;
 
-    if (!readinessPersistenceReady) {
-      setReadinessError("候補状況を使うには、user_bookmarks の candidate_readiness カラムをSupabaseへ反映してください。");
+    if (!userBookmarkPersistenceReady) {
+      setFeatureErrors({
+        readinessError:
+          "候補状況を使うには、user_bookmarks の candidate_readiness カラムをSupabaseへ反映してください。",
+      });
       return;
     }
 
-    const previousInfluencers = influencers;
-    setUpdatingReadinessId(influencer.id);
-    setReadinessError(null);
-    setInfluencers((prev) =>
-      prev.map((row) =>
-        row.id === influencer.id ? { ...row, candidateReadiness: readiness } : row
-      )
-    );
+    const previousRow = findInfluencerSnapshot(influencers, influencer.id);
+    setPending({ updatingReadinessId: influencer.id });
+    setFeatureErrors({ readinessError: null });
+    updateSingleInfluencer(influencer.id, (row) => ({ ...row, candidateReadiness: readiness }));
 
     try {
       await setBookmarkReadiness({
@@ -351,14 +694,17 @@ export const useBookmarks = (userId: string | undefined) => {
         readiness,
       });
     } catch (readinessUpdateError) {
-      setInfluencers(previousInfluencers);
-      setReadinessError(
+      if (previousRow) {
+        updateSingleInfluencer(influencer.id, () => previousRow);
+      }
+      setFeatureErrors({
+        readinessError:
         readinessUpdateError instanceof Error
           ? readinessUpdateError.message
-          : String(readinessUpdateError)
-      );
+          : String(readinessUpdateError),
+      });
     } finally {
-      setUpdatingReadinessId(null);
+      setPending({ updatingReadinessId: null });
     }
   };
 
@@ -373,14 +719,16 @@ export const useBookmarks = (userId: string | undefined) => {
   }) => {
     if (!userId) return false;
 
-    if (!riskPersistenceReady) {
-      setRiskError("リスク情報を使うには、user_bookmarks の risk_level / risk_notes カラムをSupabaseへ反映してください。");
+    if (!userBookmarkPersistenceReady) {
+      setFeatureErrors({
+        riskError:
+          "リスク情報を使うには、user_bookmarks の risk_level / risk_notes カラムをSupabaseへ反映してください。",
+      });
       return false;
     }
 
-    const previousInfluencers = influencers;
-    setUpdatingRiskId(influencer.id);
-    setRiskError(null);
+    setPending({ updatingRiskId: influencer.id });
+    setFeatureErrors({ riskError: null });
 
     try {
       const saved = await saveBookmarkRiskProfile({
@@ -389,20 +737,19 @@ export const useBookmarks = (userId: string | undefined) => {
         riskLevel,
         riskNotes,
       });
-      setInfluencers((prev) =>
-        prev.map((row) =>
-          row.id === influencer.id
-            ? { ...row, riskLevel: saved.riskLevel, riskNotes: saved.riskNotes }
-            : row
-        )
-      );
+      updateSingleInfluencer(influencer.id, (row) => ({
+        ...row,
+        riskLevel: saved.riskLevel,
+        riskNotes: saved.riskNotes,
+      }));
       return true;
     } catch (riskSaveError) {
-      setInfluencers(previousInfluencers);
-      setRiskError(riskSaveError instanceof Error ? riskSaveError.message : String(riskSaveError));
+      setFeatureErrors({
+        riskError: riskSaveError instanceof Error ? riskSaveError.message : String(riskSaveError),
+      });
       return false;
     } finally {
-      setUpdatingRiskId(null);
+      setPending({ updatingRiskId: null });
     }
   };
 
@@ -418,14 +765,16 @@ export const useBookmarks = (userId: string | undefined) => {
   }) => {
     if (!userId) return false;
 
-    if (!pricePersistenceReady) {
-      setPriceError("価格メモを使うには、user_bookmarks の estimated_price_min / estimated_price_max / price_note / price_checked_at カラムをSupabaseへ反映してください。");
+    if (!userBookmarkPersistenceReady) {
+      setFeatureErrors({
+        priceError:
+          "価格メモを使うには、user_bookmarks の estimated_price_min / estimated_price_max / price_note / price_checked_at カラムをSupabaseへ反映してください。",
+      });
       return false;
     }
 
-    const previousInfluencers = influencers;
-    setUpdatingPriceId(influencer.id);
-    setPriceError(null);
+    setPending({ updatingPriceId: influencer.id });
+    setFeatureErrors({ priceError: null });
 
     try {
       const saved = await saveBookmarkPriceMemory({
@@ -433,18 +782,16 @@ export const useBookmarks = (userId: string | undefined) => {
         accountId: influencer.id,
         ...priceMemory,
       });
-      setInfluencers((prev) =>
-        prev.map((row) =>
-          row.id === influencer.id ? { ...row, priceMemory: saved } : row
-        )
-      );
+      updateSingleInfluencer(influencer.id, (row) => ({ ...row, priceMemory: saved }));
       return true;
     } catch (priceSaveError) {
-      setInfluencers(previousInfluencers);
-      setPriceError(priceSaveError instanceof Error ? priceSaveError.message : String(priceSaveError));
+      setFeatureErrors({
+        priceError:
+          priceSaveError instanceof Error ? priceSaveError.message : String(priceSaveError),
+      });
       return false;
     } finally {
-      setUpdatingPriceId(null);
+      setPending({ updatingPriceId: null });
     }
   };
 
@@ -457,14 +804,16 @@ export const useBookmarks = (userId: string | undefined) => {
   }) => {
     if (!userId) return false;
 
-    if (!contactPersistenceReady) {
-      setContactError("連絡先ボールトを使うには、user_bookmarks の contact_info カラムをSupabaseへ反映してください。");
+    if (!userBookmarkPersistenceReady) {
+      setFeatureErrors({
+        contactError:
+          "連絡先ボールトを使うには、user_bookmarks の contact_info カラムをSupabaseへ反映してください。",
+      });
       return false;
     }
 
-    const previousInfluencers = influencers;
-    setUpdatingContactId(influencer.id);
-    setContactError(null);
+    setPending({ updatingContactId: influencer.id });
+    setFeatureErrors({ contactError: null });
 
     try {
       const saved = await saveBookmarkContactInfo({
@@ -472,18 +821,16 @@ export const useBookmarks = (userId: string | undefined) => {
         accountId: influencer.id,
         contactInfo,
       });
-      setInfluencers((prev) =>
-        prev.map((row) =>
-          row.id === influencer.id ? { ...row, contactInfo: saved } : row
-        )
-      );
+      updateSingleInfluencer(influencer.id, (row) => ({ ...row, contactInfo: saved }));
       return true;
     } catch (contactSaveError) {
-      setInfluencers(previousInfluencers);
-      setContactError(contactSaveError instanceof Error ? contactSaveError.message : String(contactSaveError));
+      setFeatureErrors({
+        contactError:
+          contactSaveError instanceof Error ? contactSaveError.message : String(contactSaveError),
+      });
       return false;
     } finally {
-      setUpdatingContactId(null);
+      setPending({ updatingContactId: null });
     }
   };
 
@@ -494,8 +841,11 @@ export const useBookmarks = (userId: string | undefined) => {
   }) => {
     if (!userId) return false;
 
-    if (!snapshotPersistenceReady) {
-      setSnapshotError("保存時スナップショットを使うには、user_bookmarks の saved_snapshot カラムをSupabaseへ反映してください。");
+    if (!userBookmarkPersistenceReady) {
+      setFeatureErrors({
+        snapshotError:
+          "保存時スナップショットを使うには、user_bookmarks の saved_snapshot カラムをSupabaseへ反映してください。",
+      });
       return false;
     }
 
@@ -507,9 +857,8 @@ export const useBookmarks = (userId: string | undefined) => {
       savedAt: new Date().toISOString(),
     };
 
-    const previousInfluencers = influencers;
-    setUpdatingSnapshotId(influencer.id);
-    setSnapshotError(null);
+    setPending({ updatingSnapshotId: influencer.id });
+    setFeatureErrors({ snapshotError: null });
 
     try {
       const saved = await saveBookmarkSavedSnapshot({
@@ -517,20 +866,18 @@ export const useBookmarks = (userId: string | undefined) => {
         accountId: influencer.id,
         snapshot,
       });
-      setInfluencers((prev) =>
-        prev.map((row) =>
-          row.id === influencer.id ? { ...row, savedSnapshot: saved } : row
-        )
-      );
+      updateSingleInfluencer(influencer.id, (row) => ({ ...row, savedSnapshot: saved }));
       return true;
     } catch (snapshotSaveError) {
-      setInfluencers(previousInfluencers);
-      setSnapshotError(
-        snapshotSaveError instanceof Error ? snapshotSaveError.message : String(snapshotSaveError)
-      );
+      setFeatureErrors({
+        snapshotError:
+          snapshotSaveError instanceof Error
+            ? snapshotSaveError.message
+            : String(snapshotSaveError),
+      });
       return false;
     } finally {
-      setUpdatingSnapshotId(null);
+      setPending({ updatingSnapshotId: null });
     }
   };
 
@@ -543,14 +890,16 @@ export const useBookmarks = (userId: string | undefined) => {
   }) => {
     if (!userId) return false;
 
-    if (!researchChecklistPersistenceReady) {
-      setResearchChecklistError("チェックリストを使うには、user_bookmarks の research_checklist カラムをSupabaseへ反映してください。");
+    if (!userBookmarkPersistenceReady) {
+      setFeatureErrors({
+        researchChecklistError:
+          "チェックリストを使うには、user_bookmarks の research_checklist カラムをSupabaseへ反映してください。",
+      });
       return false;
     }
 
-    const previousInfluencers = influencers;
-    setUpdatingResearchChecklistId(influencer.id);
-    setResearchChecklistError(null);
+    setPending({ updatingResearchChecklistId: influencer.id });
+    setFeatureErrors({ researchChecklistError: null });
 
     try {
       const savedChecklist = await saveBookmarkResearchChecklist({
@@ -558,44 +907,44 @@ export const useBookmarks = (userId: string | undefined) => {
         accountId: influencer.id,
         checklist,
       });
-      setInfluencers((prev) =>
-        prev.map((row) =>
-          row.id === influencer.id ? { ...row, researchChecklist: savedChecklist } : row
-        )
-      );
+      updateSingleInfluencer(influencer.id, (row) => ({
+        ...row,
+        researchChecklist: savedChecklist,
+      }));
       return true;
     } catch (researchChecklistSaveError) {
-      setInfluencers(previousInfluencers);
-      setResearchChecklistError(
-        researchChecklistSaveError instanceof Error
-          ? researchChecklistSaveError.message
-          : String(researchChecklistSaveError)
-      );
+      setFeatureErrors({
+        researchChecklistError:
+          researchChecklistSaveError instanceof Error
+            ? researchChecklistSaveError.message
+            : String(researchChecklistSaveError),
+      });
       return false;
     } finally {
-      setUpdatingResearchChecklistId(null);
+      setPending({ updatingResearchChecklistId: null });
     }
   };
 
   const handleToggleBookmark = async (influencer: BookmarkedInfluencer) => {
     if (!userId) return;
-  
+
     const alreadyBookmarked = influencer.hasUserBookmark;
-  
-    const previousInfluencers = influencers;
-  
-    setError(null);
-  
+    const previousRow = findInfluencerSnapshot(influencers, influencer.id);
+    const previousIndex = influencers.findIndex((row) => row.id === influencer.id);
+
+    setFeatureErrors({ error: null });
+
     setInfluencers((prev) => {
       if (!alreadyBookmarked) {
-        return prev.map((row) =>
-          row.id === influencer.id ? { ...row, hasUserBookmark: true } : row
-        );
+        return replaceInfluencerRow(prev, influencer.id, (row) => ({
+          ...row,
+          hasUserBookmark: true,
+        }));
       }
-  
+
       return prev.filter((row) => row.id !== influencer.id);
     });
-  
+
     try {
       if (alreadyBookmarked) {
         await removeUserBookmark({
@@ -609,75 +958,49 @@ export const useBookmarks = (userId: string | undefined) => {
         });
       }
     } catch (bookmarkError) {
-      setInfluencers(previousInfluencers);
-      setError(bookmarkError instanceof Error ? bookmarkError.message : String(bookmarkError));
+      if (alreadyBookmarked && previousRow && previousIndex >= 0) {
+        setInfluencers((prev) => {
+          const next = [...prev];
+          next.splice(previousIndex, 0, previousRow);
+          return next;
+        });
+      } else if (previousRow) {
+        updateSingleInfluencer(influencer.id, () => previousRow);
+      }
+      setFeatureErrors({
+        error: bookmarkError instanceof Error ? bookmarkError.message : String(bookmarkError),
+      });
     }
   };
 
   const handleCreateTag = async (name: string) => {
-    if (!userId) return false;
-
-    const trimmedName = name.trim();
-    if (!trimmedName) {
-      setTagError("タグ名を入力してください。");
-      return false;
-    }
-
-    if (!tagPersistenceReady) {
-      setTagError("タグを保存するには、bookmark_tags のマイグレーションをSupabaseへ反映してください。");
-      return false;
-    }
-
-    setCreatingTag(true);
-    setTagError(null);
-
-    try {
-      const created = await createBookmarkTag({
-        userId,
-        name: trimmedName,
-      });
-      setTags((prev) => [...prev, { id: created.id, name: created.name }]);
-      return true;
-    } catch (tagCreateError) {
-      setTagError(tagCreateError instanceof Error ? tagCreateError.message : String(tagCreateError));
-      return false;
-    } finally {
-      setCreatingTag(false);
-    }
+    return createNamedBookmarkEntity({
+      name,
+      creatingKey: "creatingTag",
+      persistenceReady: tagPersistenceReady,
+      emptyMessage: "タグ名を入力してください。",
+      persistenceMessage:
+        "タグを保存するには、bookmark_tags のマイグレーションをSupabaseへ反映してください。",
+      createEntity: async (trimmedName) => createBookmarkTag({ userId: userId!, name: trimmedName }),
+      onSuccess: (created) => setTags((prev) => [...prev, { id: created.id, name: created.name }]),
+      errorKey: "tagError",
+    });
   };
 
   const handleCreateFolder = async (name: string) => {
-    if (!userId) return false;
-
-    const trimmedName = name.trim();
-    if (!trimmedName) {
-      setFolderError("フォルダー名を入力してください。");
-      return false;
-    }
-
-    if (!folderPersistenceReady) {
-      setFolderError("フォルダーを保存するには、bookmark_folders のマイグレーションをSupabaseへ反映してください。");
-      return false;
-    }
-
-    setCreatingFolder(true);
-    setFolderError(null);
-
-    try {
-      const created = await createBookmarkFolder({
-        userId,
-        name: trimmedName,
-      });
-      setFolders((prev) => [...prev, { id: created.id, name: created.name }]);
-      return true;
-    } catch (folderCreateError) {
-      setFolderError(
-        folderCreateError instanceof Error ? folderCreateError.message : String(folderCreateError)
-      );
-      return false;
-    } finally {
-      setCreatingFolder(false);
-    }
+    return createNamedBookmarkEntity({
+      name,
+      creatingKey: "creatingFolder",
+      persistenceReady: folderPersistenceReady,
+      emptyMessage: "フォルダー名を入力してください。",
+      persistenceMessage:
+        "フォルダーを保存するには、bookmark_folders のマイグレーションをSupabaseへ反映してください。",
+      createEntity: async (trimmedName) =>
+        createBookmarkFolder({ userId: userId!, name: trimmedName }),
+      onSuccess: (created) =>
+        setFolders((prev) => [...prev, { id: created.id, name: created.name }]),
+      errorKey: "folderError",
+    });
   };
 
   const handleToggleTagAssignment = async ({
@@ -687,52 +1010,26 @@ export const useBookmarks = (userId: string | undefined) => {
     influencer: BookmarkedInfluencer;
     tagId: number;
   }) => {
-    if (!userId) return;
-
-    if (!tagPersistenceReady) {
-      setTagError("タグを使うには、bookmark_tags のマイグレーションをSupabaseへ反映してください。");
-      return;
-    }
-
-    const assignmentKey = `${influencer.id}-${tagId}`;
-    const alreadyAssigned = influencer.tagIds.includes(tagId);
-    const previousInfluencers = influencers;
-    setUpdatingTagAssignment(assignmentKey);
-    setTagError(null);
-
-    setInfluencers((prev) =>
-      prev.map((row) =>
-        row.id === influencer.id
-          ? {
-              ...row,
-              tagIds: alreadyAssigned
-                ? row.tagIds.filter((id) => id !== tagId)
-                : [...row.tagIds, tagId],
-            }
-          : row
-      )
-    );
-
-    try {
-      if (alreadyAssigned) {
-        await removeInfluencerFromBookmarkTag({
-          userId,
+    await toggleBookmarkAssignment({
+      influencer,
+      entityId: tagId,
+      entityType: "tag",
+      persistenceReady: tagPersistenceReady,
+      persistenceMessage:
+        "タグを使うには、bookmark_tags のマイグレーションをSupabaseへ反映してください。",
+      addAssignment: () =>
+        addInfluencerToBookmarkTag({
+          userId: userId!,
           tagId,
           accountId: influencer.id,
-        });
-      } else {
-        await addInfluencerToBookmarkTag({
-          userId,
+        }),
+      removeAssignment: () =>
+        removeInfluencerFromBookmarkTag({
+          userId: userId!,
           tagId,
           accountId: influencer.id,
-        });
-      }
-    } catch (assignmentError) {
-      setInfluencers(previousInfluencers);
-      setTagError(assignmentError instanceof Error ? assignmentError.message : String(assignmentError));
-    } finally {
-      setUpdatingTagAssignment(null);
-    }
+        }),
+    });
   };
 
   const handleToggleFolderAssignment = async ({
@@ -742,52 +1039,26 @@ export const useBookmarks = (userId: string | undefined) => {
     influencer: BookmarkedInfluencer;
     folderId: number;
   }) => {
-    if (!userId) return;
-
-    if (!folderPersistenceReady) {
-      setFolderError("フォルダーを使うには、bookmark_folders のマイグレーションをSupabaseへ反映してください。");
-      return;
-    }
-
-    const assignmentKey = `${influencer.id}-${folderId}`;
-    const alreadyAssigned = influencer.folderIds.includes(folderId);
-    const previousInfluencers = influencers;
-    setUpdatingFolderAssignment(assignmentKey);
-    setFolderError(null);
-
-    setInfluencers((prev) =>
-      prev.map((row) =>
-        row.id === influencer.id
-          ? {
-              ...row,
-              folderIds: alreadyAssigned
-                ? row.folderIds.filter((id) => id !== folderId)
-                : [...row.folderIds, folderId],
-            }
-          : row
-      )
-    );
-
-    try {
-      if (alreadyAssigned) {
-        await removeInfluencerFromBookmarkFolder({
-          userId,
+    await toggleBookmarkAssignment({
+      influencer,
+      entityId: folderId,
+      entityType: "folder",
+      persistenceReady: folderPersistenceReady,
+      persistenceMessage:
+        "フォルダーを使うには、bookmark_folders のマイグレーションをSupabaseへ反映してください。",
+      addAssignment: () =>
+        addInfluencerToBookmarkFolder({
+          userId: userId!,
           folderId,
           accountId: influencer.id,
-        });
-      } else {
-        await addInfluencerToBookmarkFolder({
-          userId, 
+        }),
+      removeAssignment: () =>
+        removeInfluencerFromBookmarkFolder({
+          userId: userId!,
           folderId,
           accountId: influencer.id,
-        });
-      }
-    } catch (assignmentError) {
-      setInfluencers(previousInfluencers);
-      setFolderError(assignmentError instanceof Error ? assignmentError.message : String(assignmentError));
-    } finally {
-      setUpdatingFolderAssignment(null);
-    }
+        }),
+    });
   };
 
   const handlePriorityChange = async ({
@@ -799,17 +1070,18 @@ export const useBookmarks = (userId: string | undefined) => {
   }) => {
     if (!userId) return;
 
-    if (!priorityPersistenceReady) {
-      setPriorityError("優先度を保存するには、user_bookmarks の priority カラムをSupabaseへ反映してください。");
+    if (!userBookmarkPersistenceReady) {
+      setFeatureErrors({
+        priorityError:
+          "優先度を保存するには、user_bookmarks の priority カラムをSupabaseへ反映してください。",
+      });
       return;
     }
 
-    const previousInfluencers = influencers;
-    setUpdatingPriorityId(influencer.id);
-    setPriorityError(null);
-    setInfluencers((prev) =>
-      prev.map((row) => (row.id === influencer.id ? { ...row, priority } : row))
-    );
+    const previousRow = findInfluencerSnapshot(influencers, influencer.id);
+    setPending({ updatingPriorityId: influencer.id });
+    setFeatureErrors({ priorityError: null });
+    updateSingleInfluencer(influencer.id, (row) => ({ ...row, priority }));
 
     try {
       if (priority) {
@@ -825,14 +1097,17 @@ export const useBookmarks = (userId: string | undefined) => {
         });
       }
     } catch (priorityUpdateError) {
-      setInfluencers(previousInfluencers);
-      setPriorityError(
-        priorityUpdateError instanceof Error
-          ? priorityUpdateError.message
-          : String(priorityUpdateError)
-      );
+      if (previousRow) {
+        updateSingleInfluencer(influencer.id, () => previousRow);
+      }
+      setFeatureErrors({
+        priorityError:
+          priorityUpdateError instanceof Error
+            ? priorityUpdateError.message
+            : String(priorityUpdateError),
+      });
     } finally {
-      setUpdatingPriorityId(null);
+      setPending({ updatingPriorityId: null });
     }
   };
 
@@ -845,14 +1120,16 @@ export const useBookmarks = (userId: string | undefined) => {
   }) => {
     if (!userId) return false;
 
-    if (!memoPersistenceReady) {
-      setMemoError("保存理由メモを使うには、user_bookmarks の saved_reason カラムをSupabaseへ反映してください。");
+    if (!userBookmarkPersistenceReady) {
+      setFeatureErrors({
+        memoError:
+          "保存理由メモを使うには、user_bookmarks の saved_reason カラムをSupabaseへ反映してください。",
+      });
       return false;
     }
 
-    const previousInfluencers = influencers;
-    setUpdatingMemoId(influencer.id);
-    setMemoError(null);
+    setPending({ updatingMemoId: influencer.id });
+    setFeatureErrors({ memoError: null });
 
     try {
       const savedMemo = await saveBookmarkMemo({
@@ -860,18 +1137,15 @@ export const useBookmarks = (userId: string | undefined) => {
         accountId: influencer.id,
         memo,
       });
-      setInfluencers((prev) =>
-        prev.map((row) =>
-          row.id === influencer.id ? { ...row, whySavedMemo: savedMemo } : row
-        )
-      );
+      updateSingleInfluencer(influencer.id, (row) => ({ ...row, whySavedMemo: savedMemo }));
       return true;
     } catch (memoSaveError) {
-      setInfluencers(previousInfluencers);
-      setMemoError(memoSaveError instanceof Error ? memoSaveError.message : String(memoSaveError));
+      setFeatureErrors({
+        memoError: memoSaveError instanceof Error ? memoSaveError.message : String(memoSaveError),
+      });
       return false;
     } finally {
-      setUpdatingMemoId(null);
+      setPending({ updatingMemoId: null });
     }
   };
 
@@ -888,20 +1162,25 @@ export const useBookmarks = (userId: string | undefined) => {
       (sum, influencer) => sum + Math.max(0, influencer.accounts_metrics?.maximum_likes ?? 0),
       0
     );
+    const influencersWithMaxLikes = influencers.filter(
+      (influencer) => influencer.accounts_metrics?.maximum_likes != null
+    );
 
     return {
       count: influencers.length,
       totalFollowers,
       totalPosts,
       averageMaxLikes:
-        influencers.length > 0 ? Math.round(totalMaxLikes / influencers.length) : 0,
+        influencersWithMaxLikes.length > 0
+          ? Math.round(totalMaxLikes / influencersWithMaxLikes.length)
+          : 0,
     };
   }, [influencers]);
 
   const filteredInfluencers = useMemo(() => {
     return influencers.filter((influencer) => {
       const matchesRating =
-  selectedRating === "all" || influencer.personalRating === selectedRating;
+        selectedRating === "all" || influencer.personalRating === selectedRating;
       const matchesFolder =
         selectedFolderId === "all" || influencer.folderIds.includes(selectedFolderId);
       const matchesTag = selectedTagId === "all" || influencer.tagIds.includes(selectedTagId);
@@ -920,7 +1199,15 @@ export const useBookmarks = (userId: string | undefined) => {
         matchesRisk
       );
     });
-  }, [influencers, selectedFolderId, selectedPriority, selectedRating, selectedReadiness, selectedRiskLevel, selectedTagId]);
+  }, [
+    influencers,
+    selectedFolderId,
+    selectedPriority,
+    selectedRating,
+    selectedReadiness,
+    selectedRiskLevel,
+    selectedTagId,
+  ]);
 
   return {
     influencers,
@@ -949,16 +1236,16 @@ export const useBookmarks = (userId: string | undefined) => {
     sourceError,
     folderPersistenceReady,
     tagPersistenceReady,
-    priorityPersistenceReady,
-    readinessPersistenceReady,
-    riskPersistenceReady,
-    pricePersistenceReady,
-    contactPersistenceReady,
-    snapshotPersistenceReady,
-    ratingPersistenceReady,
-    researchChecklistPersistenceReady,
-    memoPersistenceReady,
-    sourcePersistenceReady,
+    priorityPersistenceReady: userBookmarkPersistenceReady,
+    readinessPersistenceReady: userBookmarkPersistenceReady,
+    riskPersistenceReady: userBookmarkPersistenceReady,
+    pricePersistenceReady: userBookmarkPersistenceReady,
+    contactPersistenceReady: userBookmarkPersistenceReady,
+    snapshotPersistenceReady: userBookmarkPersistenceReady,
+    ratingPersistenceReady: userBookmarkPersistenceReady,
+    researchChecklistPersistenceReady: userBookmarkPersistenceReady,
+    memoPersistenceReady: userBookmarkPersistenceReady,
+    sourcePersistenceReady: userBookmarkPersistenceReady,
     creatingFolder,
     creatingTag,
     updatingFolderAssignment,

@@ -1,3 +1,5 @@
+import type { CampaignStatusValue } from "@/features/campaign/logic/campaignStatus";
+
 export type Campaign = {
   id: number | string;
   name: string;
@@ -8,7 +10,7 @@ export type Campaign = {
   goal: string | null;
   influencers: string | null;
   internal_memo?: string | null;
-  status: string | null;
+  status: CampaignStatusValue | null;
   created_at?: string | null;
 };
 
@@ -138,7 +140,7 @@ export type CampaignCustomCalendarEvent = {
   campaign_id: number | string;
   title: string;
   event_date: string;
-  event_type: string;
+  event_type: CampaignCalendarEventType;
   description: string | null;
   created_at?: string | null;
   updated_at?: string | null;

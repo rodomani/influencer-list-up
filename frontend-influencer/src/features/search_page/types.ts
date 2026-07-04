@@ -1,8 +1,8 @@
 import type { Dispatch, SetStateAction } from "react";
 
 export type CampaignOption = {
-  id: string;
-  name: string;
+  id: number | string;
+  name: string | null;
 };
 
 export type SearchFilters = {

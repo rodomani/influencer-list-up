@@ -10,7 +10,7 @@ Avoid running platform-specific analyzer scripts during the normal workflow. Tho
 
 ## What it does
 
-- finds `sns_accounts` rows with at least one bookmark
+- finds distinct bookmarked accounts from `user_bookmarks`
 - filters to supported platforms from `BOOKMARK_PLATFORMS`
 - checks recent non-failed entries in `analysis_job_runs`
 - if any required analysis is stale by `BOOKMARK_ANALYSIS_REFRESH_HOURS`, it refreshes that account
@@ -135,6 +135,12 @@ union all select 'influencer_commenter_quality_summary', count(*) from public.in
 union all select 'influencer_growth_anomaly_summary', count(*) from public.influencer_growth_anomaly_summary
 union all select 'influencer_performance_summary', count(*) from public.influencer_performance_summary;
 ```
+
+## Bookmark source of truth
+
+- `user_bookmarks` is the bookmark source of truth.
+- The refresh job deduplicates multiple users bookmarking the same `sns_accounts` row.
+- `BOOKMARK_ACCOUNT_IDS` still lets you bypass bookmark selection and target exact account ids.
 
 ## Troubleshooting
 

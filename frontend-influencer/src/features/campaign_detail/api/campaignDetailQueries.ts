@@ -39,21 +39,3 @@ export const updateCampaignInternalMemo = async ({
 
   if (error) throw new Error(readableSupabaseError(error));
 };
-
-export const updateCampaignLegacyInfluencers = async ({
-  campaignId,
-  userId,
-  influencers,
-}: {
-  campaignId: number | string;
-  userId: string;
-  influencers: string;
-}) => {
-  const { error } = await supabase
-    .from("campaigns")
-    .update({ influencers })
-    .eq("id", campaignId)
-    .eq("user_id", userId);
-
-  if (error) throw new Error(readableSupabaseError(error));
-};

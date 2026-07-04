@@ -10,7 +10,6 @@ export const SORT_OPTIONS: Array<{ value: SortOption; label: string }> = [
   { value: "likes_desc", label: "最大いいね数が多い順" },
   { value: "likes_asc", label: "最大いいね数が少ない順" },
   { value: "engagement_rate_desc", label: "反応率が高い順" },
-  { value: "posting_frequency_desc", label: "投稿頻度が高い順" },
   { value: "latest_post_desc", label: "最新投稿日が新しい順" },
   { value: "latest_post_asc", label: "最新投稿日が古い順" },
   { value: "latest_activity_desc", label: "最新アクティビティが新しい順" },
@@ -22,10 +21,39 @@ export const SORT_OPTIONS: Array<{ value: SortOption; label: string }> = [
   { value: "name_asc", label: "アカウント名順" },
 ];
 
-const postingFrequency = (influencer: InfluencerNormalized) => {
-  const spanDays = influencer.posting_span_days ?? 0;
-  if (spanDays <= 0) return 0;
-  return metricNumber(influencer.accounts_metrics?.posts) / spanDays;
+const freshnessScore = (timestamp?: string | null) => {
+  const activityMs = timestampToMs(timestamp);
+  if (activityMs <= 0) return 0;
+
+  const ageDays = (Date.now() - activityMs) / (1000 * 60 * 60 * 24);
+  return 1 / (1 + Math.max(0, ageDays));
+};
+
+const recommendationScore = (influencer: InfluencerNormalized) => {
+  const metrics = influencer.accounts_metrics;
+  const followers = metricNumber(metrics?.followers);
+  const maximumLikes = metricNumber(metrics?.maximum_likes);
+  const engagement = engagementRate(metrics);
+  const bookmarks = influencer.bookmark_count ?? 0;
+  const keywordMatches = keywordCount(influencer.keywords);
+
+  const followersScore = Math.log10(followers + 1);
+  const likesScore = Math.log10(maximumLikes + 1);
+  const engagementScore = Math.min(engagement, 20) / 20;
+  const savedScore = Math.log10(bookmarks + 1);
+  const keywordScore = Math.min(keywordMatches, 5) / 5;
+  const recentActivityScore = freshnessScore(
+    influencer.latest_activity_at ?? influencer.latest_posted_at ?? metrics?.metric_date
+  );
+
+  return (
+    followersScore * 0.3 +
+    likesScore * 0.15 +
+    engagementScore * 0.25 +
+    recentActivityScore * 0.2 +
+    savedScore * 0.05 +
+    keywordScore * 0.05
+  );
 };
 
 export const sortInfluencers = (influencers: InfluencerNormalized[], sortOption: SortOption) => {
@@ -51,8 +79,6 @@ export const sortInfluencers = (influencers: InfluencerNormalized[], sortOption:
         return metricNumber(aMetrics?.maximum_likes) - metricNumber(bMetrics?.maximum_likes) || byOriginalOrder(a, b);
       case "engagement_rate_desc":
         return engagementRate(bMetrics) - engagementRate(aMetrics) || byOriginalOrder(a, b);
-      case "posting_frequency_desc":
-        return postingFrequency(b.influencer) - postingFrequency(a.influencer) || byOriginalOrder(a, b);
       case "latest_post_desc":
         return timestampToMs(b.influencer.latest_posted_at) - timestampToMs(a.influencer.latest_posted_at) || byOriginalOrder(a, b);
       case "latest_post_asc":
@@ -66,14 +92,17 @@ export const sortInfluencers = (influencers: InfluencerNormalized[], sortOption:
       case "posting_span_asc":
         return (a.influencer.posting_span_days ?? 0) - (b.influencer.posting_span_days ?? 0) || byOriginalOrder(a, b);
       case "bookmarks_desc":
-        return b.influencer.bookmarks.length - a.influencer.bookmarks.length || byOriginalOrder(a, b);
+        return (
+          (b.influencer.bookmark_count ?? 0) - (a.influencer.bookmark_count ?? 0) ||
+          byOriginalOrder(a, b)
+        );
       case "keyword_count_desc":
         return keywordCount(b.influencer.keywords) - keywordCount(a.influencer.keywords) || byOriginalOrder(a, b);
       case "name_asc":
         return a.influencer.account_name.localeCompare(b.influencer.account_name, "ja") || byOriginalOrder(a, b);
       case "recommended":
       default:
-        return byOriginalOrder(a, b);
+        return recommendationScore(b.influencer) - recommendationScore(a.influencer) || byOriginalOrder(a, b);
     }
   });
 

@@ -12,6 +12,8 @@ import {
   CarouselNext,
   CarouselPrevious,
 } from "@/components/ui/carousel";
+import { calculateWeightedInfluencerScore } from "@/features/influencer_detail/logic/influencerScore";
+import type { InfluencerAverageCommentAnalysis } from "@/features/influencer_detail/types";
 import { supabase } from "@/lib/supabase";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -50,6 +52,30 @@ type AverageCommentAnalysisRow = {
   avg_spam_rate: number | null;
 };
 
+const toAverageAnalysis = (
+  accountId: number,
+  analysis: AverageCommentAnalysisRow | null | undefined
+): InfluencerAverageCommentAnalysis | null => {
+  if (!analysis) return null;
+
+  return {
+    account_id: accountId,
+    window: "all_posts",
+    posts_count: null,
+    avg_sentiment: analysis.avg_sentiment,
+    avg_toxicity: analysis.avg_toxicity,
+    avg_hate_score: null,
+    avg_conversion_intent_rate: null,
+    avg_spam_rate: analysis.avg_spam_rate,
+    sum_sampled_total: null,
+    sum_filtered_total: null,
+    avg_emotion: null,
+    avg_language: null,
+    avg_topics: null,
+    updated_at: null,
+  };
+};
+
 const timestampToMs = (value: string | null | undefined) => {
   if (!value) return Number.NEGATIVE_INFINITY;
   const iso = value.includes("T") ? value : value.replace(" ", "T");
@@ -64,44 +90,6 @@ const daysBetween = (start: string | null | undefined, end: string | null | unde
   return Math.max(0, Math.round((endMs - startMs) / 86_400_000));
 };
 
-const clampScore = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
-
-const SCORE_BENCHMARKS = {
-  followers: 300_000,
-  maximumLikes: 30_000,
-  posts: 200,
-  postingSpanDays: 180,
-};
-
-const normalizeLinearScore = (value: number | null | undefined, max: number) => {
-  if (typeof value !== "number" || value <= 0 || max <= 0) return 0;
-  return clampScore((value / max) * 100);
-};
-
-const normalizeLogScore = (value: number | null | undefined, max: number) => {
-  if (typeof value !== "number" || value <= 0 || max <= 1) return 0;
-  return clampScore((Math.log10(value + 1) / Math.log10(max + 1)) * 100);
-};
-
-const freshnessScore = (value: string | null | undefined) => {
-  const postedAt = timestampToMs(value);
-  if (postedAt === Number.NEGATIVE_INFINITY) return 0;
-  const ageDays = Math.floor((Date.now() - postedAt) / 86_400_000);
-  if (ageDays <= 14) return 100;
-  if (ageDays <= 45) return 80;
-  if (ageDays <= 120) return 55;
-  if (ageDays <= 240) return 35;
-  return 20;
-};
-
-const commentQualityScore = (analysis: AverageCommentAnalysisRow | undefined) => {
-  if (!analysis) return 65;
-  const sentiment = typeof analysis.avg_sentiment === "number" ? ((analysis.avg_sentiment + 1) / 2) * 100 : 65;
-  const spamPenalty = typeof analysis.avg_spam_rate === "number" ? analysis.avg_spam_rate * 100 : 12;
-  const toxicityPenalty = typeof analysis.avg_toxicity === "number" ? analysis.avg_toxicity * 100 : 8;
-  return clampScore(sentiment - spamPenalty * 0.6 - toxicityPenalty * 0.4);
-};
-
 const latestMetrics = (user: User) =>
   Array.isArray(user.accounts_metrics) && user.accounts_metrics.length > 0
     ? user.accounts_metrics[0]
@@ -114,9 +102,13 @@ export function HomeScreen() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+
     const fetchHighScoreInfluencers = async () => {
-      setLoading(true);
-      setError(null);
+      if (!cancelled) {
+        setLoading(true);
+        setError(null);
+      }
 
       const { data, error: fetchError } = await supabase
         .from("sns_accounts")
@@ -141,9 +133,11 @@ export function HomeScreen() {
         .limit(100);
 
       if (fetchError) {
-        setError(fetchError.message);
-        setUsers([]);
-        setLoading(false);
+        if (!cancelled) {
+          setError(fetchError.message);
+          setUsers([]);
+          setLoading(false);
+        }
         return;
       }
 
@@ -167,6 +161,8 @@ export function HomeScreen() {
               .eq("window", "all_posts")
           : Promise.resolve({ data: [], error: null }),
       ]);
+
+      if (cancelled) return;
 
       if (postsResponse.error) {
         setError(postsResponse.error.message);
@@ -228,27 +224,35 @@ export function HomeScreen() {
       const scored = accounts
         .map((account) => {
           const metrics = latestMetrics(account);
-          const activity = activityByAccount.get(Number(account.id));
-          const analysis = analysisByAccount.get(Number(account.id));
-          const score = clampScore(
-            normalizeLogScore(metrics?.followers, SCORE_BENCHMARKS.followers) * 0.25 +
-              normalizeLogScore(metrics?.maximum_likes, SCORE_BENCHMARKS.maximumLikes) * 0.2 +
-              normalizeLinearScore(metrics?.posts, SCORE_BENCHMARKS.posts) * 0.15 +
-              freshnessScore(activity?.latest_posted_at) * 0.2 +
-              normalizeLinearScore(activity?.posting_span_days, SCORE_BENCHMARKS.postingSpanDays) * 0.1 +
-              commentQualityScore(analysis) * 0.1
+          const accountId = Number(account.id);
+          const activity = activityByAccount.get(accountId);
+          const analysis = toAverageAnalysis(
+            accountId,
+            analysisByAccount.get(accountId) ?? null
           );
+          const score = calculateWeightedInfluencerScore({
+            metrics,
+            latestPostedAt: activity?.latest_posted_at,
+            postingSpanDays: activity?.posting_span_days,
+            analysis,
+          });
 
           return { ...account, influencer_score: score };
         })
         .sort((a, b) => (b.influencer_score ?? 0) - (a.influencer_score ?? 0))
         .slice(0, 10);
 
-      setUsers(scored);
-      setLoading(false);
+      if (!cancelled) {
+        setUsers(scored);
+        setLoading(false);
+      }
     };
 
     fetchHighScoreInfluencers();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
   return (
     <div className="deco-page flex flex-col gap-6">

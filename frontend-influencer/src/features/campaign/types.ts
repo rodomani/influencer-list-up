@@ -10,7 +10,7 @@ export type Campaign = {
   goal: string | null;
   influencers?: string | null;
   internal_memo?: string | null;
-  status: CampaignStatusValue | string | null;
+  status: CampaignStatusValue | null;
 };
 
 export type CampaignDashboardSummary = {

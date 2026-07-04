@@ -1,6 +1,7 @@
 import { type FormEvent, useState } from "react";
 import type {
   CampaignCalendarEvent,
+  CampaignCalendarEventType,
   CampaignCalendarMonth,
   CampaignCustomCalendarEvent,
 } from "../types";
@@ -14,7 +15,7 @@ import {
 type CustomCalendarEventPayload = {
   title: string;
   eventDate: string;
-  eventType: string;
+  eventType: CampaignCalendarEventType;
   description: string;
 };
 
@@ -34,13 +35,13 @@ type CampaignCalendarViewPanelProps = {
 
 const WEEKDAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
 const CUSTOM_EVENT_TYPE_OPTIONS = [
-  { value: "meeting", label: "打ち合わせ" },
-  { value: "content_review", label: "内容確認" },
-  { value: "payment", label: "支払い期限" },
-  { value: "posting", label: "投稿予定" },
-  { value: "report", label: "レポート" },
+  { value: "review", label: "内容確認" },
+  { value: "deliverable", label: "納品・支払い" },
+  { value: "influencer", label: "候補者対応" },
+  { value: "campaign", label: "投稿予定" },
+  { value: "task", label: "レポート" },
   { value: "custom", label: "その他" },
-];
+] as const satisfies Array<{ value: CampaignCalendarEventType; label: string }>;
 
 export function CampaignCalendarViewPanel({
   months,
@@ -57,7 +58,7 @@ export function CampaignCalendarViewPanel({
 }: CampaignCalendarViewPanelProps) {
   const [title, setTitle] = useState("");
   const [eventDate, setEventDate] = useState("");
-  const [eventType, setEventType] = useState("meeting");
+  const [eventType, setEventType] = useState<CampaignCalendarEventType>("review");
   const [description, setDescription] = useState("");
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -72,7 +73,7 @@ export function CampaignCalendarViewPanel({
 
     setTitle("");
     setEventDate("");
-    setEventType("meeting");
+    setEventType("review");
     setDescription("");
   };
 
@@ -146,7 +147,9 @@ export function CampaignCalendarViewPanel({
               種類
               <select
                 value={eventType}
-                onChange={(event) => setEventType(event.target.value)}
+                onChange={(event) =>
+                  setEventType(event.target.value as CampaignCalendarEventType)
+                }
                 className="h-11 border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none transition focus:border-[#D4AF37] focus:ring-2 focus:ring-[#D4AF37]/20"
               >
                 {CUSTOM_EVENT_TYPE_OPTIONS.map((option) => (

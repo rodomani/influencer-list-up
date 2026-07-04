@@ -1,55 +1,63 @@
 import { supabase } from "@/lib/supabase";
+import {
+  isMissingSchemaObjectError,
+  readableSupabaseError,
+  type SupabaseErrorLike,
+} from "@/lib/supabaseErrors";
 import type { CampaignInfluencer, CampaignInfluencerAccount } from "../types";
 
 type CampaignInfluencerRelationRow = Omit<CampaignInfluencer, "account"> & {
-  sns_accounts?: CampaignInfluencerAccount | CampaignInfluencerAccount[] | null;
+  sns_accounts?: Omit<CampaignInfluencerAccount, "accounts_metrics"> |
+    Array<Omit<CampaignInfluencerAccount, "accounts_metrics">> |
+    null;
 };
 
-const normalizeAccount = (
-  value: CampaignInfluencerRelationRow["sns_accounts"]
-): CampaignInfluencerAccount | null => {
+type LatestAccountMetricRow = {
+  account_id: number | null;
+  followers: number | null;
+  posts: number | null;
+  maximum_likes: number | null;
+  metric_date: string | null;
+};
+
+type RecommendInfluencersRpcRow = {
+  id: number;
+  platform: string;
+  account_name: string;
+  profile_image_url: string | null;
+  gender: string | null;
+  keywords: string | null;
+  followers: number | null;
+  posts: number | null;
+  maximum_likes: number | null;
+  metric_date: string | null;
+  recommendation_score: number | null;
+  recommendation_reasons: unknown;
+};
+
+const normalizeAccount = ({
+  value,
+  latestMetricByAccountId,
+}: {
+  value: CampaignInfluencerRelationRow["sns_accounts"];
+  latestMetricByAccountId: Map<number, LatestAccountMetricRow>;
+}): CampaignInfluencerAccount | null => {
   const account = Array.isArray(value) ? value[0] ?? null : value ?? null;
-  if (!account?.accounts_metrics) return account;
+  if (!account) return null;
 
   return {
     ...account,
-    accounts_metrics: [...account.accounts_metrics].sort((a, b) => {
-      const aTime = a.metric_date ? new Date(a.metric_date).getTime() : 0;
-      const bTime = b.metric_date ? new Date(b.metric_date).getTime() : 0;
-      return bTime - aTime;
-    }),
+    accounts_metrics:
+      typeof account.id === "number" && latestMetricByAccountId.has(account.id)
+        ? [latestMetricByAccountId.get(account.id)!]
+        : [],
   };
 };
 
-const readableSupabaseError = (error: unknown) => {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  if (error && typeof error === "object") {
-    const maybeError = error as {
-      message?: unknown;
-      details?: unknown;
-      hint?: unknown;
-      code?: unknown;
-    };
-    return [
-      typeof maybeError.message === "string" ? maybeError.message : null,
-      typeof maybeError.details === "string" ? maybeError.details : null,
-      typeof maybeError.hint === "string" ? maybeError.hint : null,
-      typeof maybeError.code === "string" ? `code: ${maybeError.code}` : null,
-    ]
-      .filter(Boolean)
-      .join(" ");
-  }
-  return "不明なエラーが発生しました。";
-};
-
 const isMissingCampaignInfluencersTable = (error: unknown) => {
-  if (!error || typeof error !== "object") return false;
-  const maybeError = error as { code?: unknown; message?: unknown };
-  return (
-    maybeError.code === "PGRST205" &&
-    typeof maybeError.message === "string" &&
-    maybeError.message.includes("campaign_influencers")
+  return isMissingSchemaObjectError(
+    (error ?? {}) as SupabaseErrorLike,
+    ["campaign_influencers"]
   );
 };
 
@@ -74,8 +82,7 @@ export const fetchCampaignInfluencers = async (campaignId: number | string) => {
         account_name,
         profile_image_url,
         gender,
-        keywords,
-        accounts_metrics(maximum_likes, posts, followers, metric_date)
+        keywords
       )
     `
     )
@@ -87,31 +94,92 @@ export const fetchCampaignInfluencers = async (campaignId: number | string) => {
     throw new Error(readableSupabaseError(error));
   }
 
-  return ((data as CampaignInfluencerRelationRow[]) ?? []).map((row) => ({
+  const rows = (data as CampaignInfluencerRelationRow[]) ?? [];
+  const accountIds = rows
+    .map((row) => {
+      const account = Array.isArray(row.sns_accounts) ? row.sns_accounts[0] : row.sns_accounts;
+      return typeof account?.id === "number" ? account.id : null;
+    })
+    .filter((accountId): accountId is number => accountId !== null);
+
+  const latestMetricByAccountId = new Map<number, LatestAccountMetricRow>();
+  if (accountIds.length > 0) {
+    const { data: latestMetrics, error: latestMetricsError } = await supabase
+      .from("latest_account_metrics")
+      .select("account_id, followers, posts, maximum_likes, metric_date")
+      .in("account_id", accountIds);
+
+    if (latestMetricsError) {
+      throw new Error(readableSupabaseError(latestMetricsError));
+    }
+
+    ((latestMetrics as LatestAccountMetricRow[] | null) ?? []).forEach((metric) => {
+      if (typeof metric.account_id === "number") {
+        latestMetricByAccountId.set(metric.account_id, metric);
+      }
+    });
+  }
+
+  return rows.map((row) => ({
     ...row,
-    account: normalizeAccount(row.sns_accounts),
+    account: normalizeAccount({
+      value: row.sns_accounts,
+      latestMetricByAccountId,
+    }),
   }));
 };
 
-export const fetchRecommendationCandidateAccounts = async () => {
-  const { data, error } = await supabase
-    .from("sns_accounts")
-    .select(
-      `
-      id,
-      platform,
-      account_name,
-      profile_image_url,
-      gender,
-      keywords,
-      accounts_metrics(maximum_likes, posts, followers, metric_date)
-    `
-    )
-    .limit(120)
-    .order("metric_date", { foreignTable: "accounts_metrics", ascending: false });
+export const recommendInfluencersForCampaign = async ({
+  campaignId,
+  goal,
+  budget,
+  excludedAccountIds,
+  limit = 6,
+}: {
+  campaignId: number | string;
+  goal?: string | null;
+  budget?: number | null;
+  excludedAccountIds: number[];
+  limit?: number;
+}) => {
+  const { data, error } = await supabase.rpc("recommend_influencers_for_campaign", {
+    p_campaign_id: Number(campaignId),
+    p_goal: goal?.trim() || null,
+    p_budget: budget ?? null,
+    p_excluded_account_ids: excludedAccountIds.length ? excludedAccountIds : null,
+    p_limit: limit,
+  });
 
   if (error) throw new Error(readableSupabaseError(error));
-  return ((data as CampaignInfluencerAccount[]) ?? []).filter((account) => account.account_name);
+
+  return ((data as RecommendInfluencersRpcRow[] | null) ?? []).map((row) => ({
+    id: row.id,
+    platform: row.platform,
+    account_name: row.account_name,
+    profile_image_url: row.profile_image_url,
+    gender: row.gender,
+    keywords: row.keywords,
+    accounts_metrics: [
+      {
+        followers: row.followers,
+        posts: row.posts,
+        maximum_likes: row.maximum_likes,
+        metric_date: row.metric_date,
+      },
+    ],
+    latestMetric: {
+      followers: row.followers,
+      posts: row.posts,
+      maximum_likes: row.maximum_likes,
+      metric_date: row.metric_date,
+    },
+    recommendationScore: row.recommendation_score ?? 0,
+    recommendationReasons: Array.isArray(row.recommendation_reasons)
+      ? row.recommendation_reasons.filter(
+          (reason): reason is string => typeof reason === "string" && reason.length > 0
+        )
+      : [],
+  }));
 };
 
 export const addCampaignInfluencerRelation = async ({
@@ -135,53 +203,95 @@ export const addCampaignInfluencerRelation = async ({
   if (error) throw new Error(readableSupabaseError(error));
 };
 
+const assertCampaignOwnership = async ({
+  campaignId,
+  userId,
+}: {
+  campaignId: number | string;
+  userId: string;
+}) => {
+  const { data, error } = await supabase
+    .from("campaigns")
+    .select("id")
+    .eq("id", campaignId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) throw new Error(readableSupabaseError(error));
+  if (!data) throw new Error("このキャンペーンを更新する権限がありません。");
+};
+
 export const updateCampaignInfluencerStatus = async ({
   relationId,
+  campaignId,
+  userId,
   status,
 }: {
   relationId: number;
+  campaignId: number | string;
+  userId: string;
   status: string;
 }) => {
+  await assertCampaignOwnership({ campaignId, userId });
+
   const { error } = await supabase
     .from("campaign_influencers")
     .update({
       status,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", relationId);
+    .eq("id", relationId)
+    .eq("campaign_id", campaignId);
 
   if (error) throw new Error(readableSupabaseError(error));
 };
 
 export const updateCampaignInfluencerQuotedPrice = async ({
   relationId,
+  campaignId,
+  userId,
   quotedPrice,
 }: {
   relationId: number;
+  campaignId: number | string;
+  userId: string;
   quotedPrice: number | null;
 }) => {
+  if (quotedPrice !== null && quotedPrice < 0) {
+    throw new Error("見積金額は0以上で入力してください。");
+  }
+
+  await assertCampaignOwnership({ campaignId, userId });
+
   const { error } = await supabase
     .from("campaign_influencers")
     .update({
       quoted_price: quotedPrice,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", relationId);
+    .eq("id", relationId)
+    .eq("campaign_id", campaignId);
 
   if (error) throw new Error(readableSupabaseError(error));
 };
 
 export const updateCampaignInfluencerDeliverables = async ({
   relationId,
+  campaignId,
+  userId,
   deliverables,
   deliverableStatus,
   deliverableDueDate,
 }: {
   relationId: number;
+  campaignId: number | string;
+  userId: string;
   deliverables: string;
   deliverableStatus: string;
   deliverableDueDate: string | null;
 }) => {
+  await assertCampaignOwnership({ campaignId, userId });
+
   const { error } = await supabase
     .from("campaign_influencers")
     .update({
@@ -190,16 +300,28 @@ export const updateCampaignInfluencerDeliverables = async ({
       deliverable_due_date: deliverableDueDate,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", relationId);
+    .eq("id", relationId)
+    .eq("campaign_id", campaignId);
 
   if (error) throw new Error(readableSupabaseError(error));
 };
 
-export const removeCampaignInfluencer = async (relationId: number) => {
+export const removeCampaignInfluencer = async ({
+  relationId,
+  campaignId,
+  userId,
+}: {
+  relationId: number;
+  campaignId: number | string;
+  userId: string;
+}) => {
+  await assertCampaignOwnership({ campaignId, userId });
+
   const { error } = await supabase
     .from("campaign_influencers")
     .delete()
-    .eq("id", relationId);
+    .eq("id", relationId)
+    .eq("campaign_id", campaignId);
 
   if (error) throw new Error(readableSupabaseError(error));
 };

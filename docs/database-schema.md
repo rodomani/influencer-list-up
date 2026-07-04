@@ -17,6 +17,9 @@ erDiagram
   posts ||--o{ post_sponsorship_analysis : has
   posts ||--o{ post_hashtag : tagged
   hashtags ||--o{ post_hashtag : joins
+  sns_accounts ||--o{ user_bookmarks : bookmarked_by
+  user_bookmarks ||--o{ bookmark_folder_items : grouped_in
+  user_bookmarks ||--o{ bookmark_tag_items : labeled_in
   sns_accounts ||--o{ influencer_average_comment_analysis : summarizes
   sns_accounts ||--o{ influencer_commenter_quality_summary : summarizes
   sns_accounts ||--o{ influencer_growth_anomaly_summary : summarizes
@@ -60,7 +63,7 @@ Common fields used by the code:
 - `budget`
 - `goal`
 - `status`
-- `influencers`: text list currently appended from search results.
+- `influencers`: legacy text cache. `campaign_influencers` is the normalized source of truth.
 - `created_at`
 
 Used by:
@@ -93,7 +96,6 @@ Common fields used by the code:
 - `does_livestream`
 - `keywords`: comma-separated keyword text.
 - `is_verified`
-- `bookmarks`: array of user ids that bookmarked the account.
 - `last_profile_scraped_at`
 - `last_posts_scraped_at`
 
@@ -121,6 +123,50 @@ Important uniqueness pattern:
 - `account_id, metric_date`
 
 Used by frontend search/detail views and growth/performance analysis.
+
+## Bookmark Tables
+
+### `user_bookmarks`
+
+Primary bookmark table.
+
+Common fields used by the code:
+
+- `id`
+- `user_id`
+- `account_id`
+- `priority`
+- `personal_rating`
+- `candidate_readiness`
+- `risk_level`
+- `risk_notes`
+- `estimated_price_min`
+- `estimated_price_max`
+- `price_note`
+- `price_checked_at`
+- `contact_info`
+- `saved_snapshot`
+- `research_checklist`
+- `saved_reason`
+- `private_memo`
+- `saved_source`
+- `saved_source_detail`
+- `created_at`
+- `updated_at`
+
+Important uniqueness pattern:
+
+- `user_id, account_id`
+
+### `bookmark_folders` and `bookmark_folder_items`
+
+- `bookmark_folders` stores user-defined bookmark folders.
+- `bookmark_folder_items` links a folder to `user_bookmarks.id` via `bookmark_id`.
+
+### `bookmark_tags` and `bookmark_tag_items`
+
+- `bookmark_tags` stores user-defined bookmark tags.
+- `bookmark_tag_items` links a tag to `user_bookmarks.id` via `bookmark_id`.
 
 ## Post and Hashtag Tables
 

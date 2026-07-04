@@ -20,10 +20,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from single_influencer_refresh import (
+    SUPABASE,
     filter_columns,
     refresh_single_influencer,
-    sb_get,
-    sb_patch,
     utcnow_iso,
 )
 
@@ -129,21 +128,11 @@ def build_failure_monitoring(error: Exception) -> Dict[str, Any]:
     }
 
 
-def fetch_queued_jobs(limit: int) -> List[Dict[str, Any]]:
+def claim_queued_jobs(limit: int) -> List[Dict[str, Any]]:
     if limit <= 0:
         return []
-    return sb_get(
-        "analysis_job_runs",
-        {
-            "select": "id,account_id,platform,status,details,started_at,finished_at,created_at",
-            "analysis_name": f"eq.{ANALYSIS_NAME}",
-            "status": "eq.queued",
-            "order": "created_at.asc",
-            "limit": str(limit),
-        },
-        range_from=0,
-        range_to=limit - 1,
-    )
+    rows = SUPABASE.rpc("claim_single_influencer_refresh_jobs", {"job_limit": limit})
+    return rows if isinstance(rows, list) else []
 
 
 def fetch_stale_running_jobs(stale_minutes: int, limit: int) -> List[Dict[str, Any]]:
@@ -151,7 +140,7 @@ def fetch_stale_running_jobs(stale_minutes: int, limit: int) -> List[Dict[str, A
         return []
 
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)
-    rows = sb_get(
+    rows = SUPABASE.get(
         "analysis_job_runs",
         {
             "select": "id,account_id,platform,status,details,started_at,finished_at,created_at",
@@ -173,7 +162,7 @@ def fetch_stale_running_jobs(stale_minutes: int, limit: int) -> List[Dict[str, A
 def fetch_failed_jobs(limit: int) -> List[Dict[str, Any]]:
     if limit <= 0:
         return []
-    return sb_get(
+    return SUPABASE.get(
         "analysis_job_runs",
         {
             "select": "id,account_id,platform,status,details,started_at,finished_at,created_at",
@@ -188,26 +177,16 @@ def fetch_failed_jobs(limit: int) -> List[Dict[str, Any]]:
 
 
 def update_job(job_id: int, fields: Dict[str, Any]) -> None:
-    payload = filter_columns(
-        "analysis_job_runs",
-        {
-            **fields,
-            "finished_at": fields.get("finished_at"),
-        },
-    )
-    sb_patch("analysis_job_runs", {"id": f"eq.{job_id}"}, payload)
+    payload = filter_columns("analysis_job_runs", fields)
+    SUPABASE.patch("analysis_job_runs", {"id": f"eq.{job_id}"}, payload)
 
 
-def mark_running(job: Dict[str, Any]) -> str:
-    started_at = utcnow_iso()
+def attach_running_metadata(job: Dict[str, Any]) -> str:
+    started_at = str(job.get("started_at") or utcnow_iso())
     current_retry_count = retry_count(job)
     update_job(
         int(job["id"]),
         {
-            "status": "running",
-            "started_at": started_at,
-            "finished_at": started_at,
-            "error_message": None,
             "details": with_retry_details(
                 job,
                 retry_count_value=current_retry_count,
@@ -286,7 +265,7 @@ def process_job(job: Dict[str, Any], *, include_posts_override: Optional[bool]) 
     job_id = int(job["id"])
     account_id = job.get("account_id")
     if account_id is None:
-        started_at = mark_running(job)
+        started_at = attach_running_metadata(job)
         mark_failed(
             job,
             started_at=started_at,
@@ -297,7 +276,7 @@ def process_job(job: Dict[str, Any], *, include_posts_override: Optional[bool]) 
         return False
 
     include_posts = resolve_include_posts(job, include_posts_override)
-    started_at = mark_running(job)
+    started_at = attach_running_metadata(job)
 
     try:
         print(f"job={job_id} account_id={account_id} refresh started include_posts={include_posts}")
@@ -360,7 +339,7 @@ def process_once(
                         "requeued_after_stale_running_minutes": retry_stale_running_minutes,
                     },
                 ),
-                "finished_at": utcnow_iso(),
+                "finished_at": None,
             },
         )
 
@@ -418,11 +397,11 @@ def process_once(
                             "requeued_from_failed": True,
                         },
                     ),
-                    "finished_at": utcnow_iso(),
+                    "finished_at": None,
                 },
             )
 
-    jobs = fetch_queued_jobs(limit)
+    jobs = claim_queued_jobs(limit)
     if not jobs:
         print("No queued single influencer refresh jobs.")
         return 0

@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js"
+import { handleCors, jsonResponse, readBearerToken } from "../_shared/http.ts"
 
 type FbAccountsResp = {
   data?: Array<{ instagram_business_account?: { id?: string } }>
@@ -16,6 +17,23 @@ type IgMediaItem = {
 
 type InsightsResponse = {
   data?: Array<{ name?: string; values?: Array<{ value?: number }> }>
+}
+
+type SyncPostsRequestBody = {
+  account_id?: number
+  profile_id?: string
+}
+
+type PostMetricSnapshotInsert = {
+  post_id: number
+  views: number | null
+  likes: number
+  comments_count: number
+  duration_seconds: number | null
+  like_view_rate: number
+  comment_view_rate: number
+  captured_at: string
+  created_at: string
 }
 
 function requireEnv(name: string): string {
@@ -60,10 +78,16 @@ async function graphGet<T>(
   url.searchParams.set("access_token", token)
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
 
-  const res = await fetch(url.toString())
-  const json = await res.json()
-  if (!res.ok) throw new Error(`GRAPH ${res.status}: ${JSON.stringify(json)}`)
-  return json as T
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 15000)
+  try {
+    const res = await fetch(url.toString(), { signal: controller.signal })
+    const json = await res.json()
+    if (!res.ok) throw new Error(`GRAPH ${res.status}: ${JSON.stringify(json)}`)
+    return json as T
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 async function getIgBusinessUserId(fbUserToken: string): Promise<string> {
@@ -100,33 +124,72 @@ async function mediaInsights(mediaId: string, token: string): Promise<number | n
   }
 }
 
-export default Deno.serve(async () => {
+async function readBody(req: Request): Promise<SyncPostsRequestBody> {
   try {
+    return (await req.json()) as SyncPostsRequestBody
+  } catch {
+    throw new Error('Invalid JSON body. Expected: { "account_id": 123 } or { "profile_id": "<uuid>" }')
+  }
+}
+
+export default Deno.serve(async (req) => {
+  try {
+    const corsResponse = handleCors(req)
+    if (corsResponse) return corsResponse
+
+    if (req.method !== "POST") {
+      return jsonResponse({ ok: false, error: "Use POST" }, 405)
+    }
+
     const SUPABASE_URL = requireEnv("SUPABASE_URL")
     const SERVICE_ROLE_KEY = requireEnv("SUPABASE_SERVICE_ROLE_KEY")
     const FB_USER_ACCESS_TOKEN = normalizeToken(requireEnv("IG_ACCESS_TOKEN"))
     const IG_PLATFORM = Deno.env.get("IG_PLATFORM") ?? "instagram"
+    const callerToken = readBearerToken(req)
+    const body = await readBody(req)
 
     const LIMIT_MEDIA = Number(Deno.env.get("LIMIT_MEDIA") ?? "25")
     const TOP_N = Number(Deno.env.get("TOP_N") ?? "5")
 
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
+    const authClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+      global: { headers: { Authorization: `Bearer ${callerToken}` } },
+    })
+
+    const { data: userResult, error: userError } = await authClient.auth.getUser()
+    if (userError) throw new Error(`Failed to validate caller: ${userError.message}`)
+
+    const caller = userResult.user
+    if (!caller) throw new Error("Authentication required")
+
     const nowIso = new Date().toISOString()
     const today = nowIso.slice(0, 10)
 
-    const igUserId = await getIgBusinessUserId(FB_USER_ACCESS_TOKEN)
-
     // Get our sns_accounts row (created by sync-instagram-account)
-    const { data: acc, error: accErr } = await supabase
+    let accountLookup = supabase
       .from("sns_accounts")
-      .select("id,profile_id")
+      .select("id,profile_id,platform_profile_id")
       .eq("platform", IG_PLATFORM)
-      .eq("profile_id", igUserId)
-      .maybeSingle()
+      .eq("profile_id", caller.id)
+
+    if (Number.isInteger(body.account_id) && Number(body.account_id) > 0) {
+      accountLookup = accountLookup.eq("id", Number(body.account_id))
+    } else if (typeof body.profile_id === "string" && body.profile_id.trim()) {
+      if (body.profile_id.trim() !== caller.id) {
+        return jsonResponse(
+          { ok: false, error: "You can only sync posts for your own Instagram account." },
+          403
+        )
+      }
+      accountLookup = accountLookup.eq("profile_id", body.profile_id.trim())
+    }
+
+    const { data: acc, error: accErr } = await accountLookup.maybeSingle()
 
     if (accErr) throw new Error(accErr.message)
     if (!acc) throw new Error("sns_accounts row not found. Run sync-instagram-account first.")
     const accountId = acc.id as number
+    const igUserId = (acc.platform_profile_id ?? "").trim() || await getIgBusinessUserId(FB_USER_ACCESS_TOKEN)
 
     // recent media
     const mediaResp = await graphGet<{ data?: IgMediaItem[] }>(`/${igUserId}/media`, FB_USER_ACCESS_TOKEN, {
@@ -136,7 +199,7 @@ export default Deno.serve(async () => {
     const media = mediaResp.data ?? []
 
     // compute viewsLike, pick TOP_N by viewsLike
-    const enriched = []
+    const enriched: Array<IgMediaItem & { viewsLike: number | null }> = []
     for (const item of media) {
       const viewsLike = await mediaInsights(item.id, FB_USER_ACCESS_TOKEN)
       enriched.push({ ...item, viewsLike })
@@ -180,7 +243,7 @@ export default Deno.serve(async () => {
       if (postErr) throw new Error(`posts upsert failed (${item.id}): ${postErr.message}`)
       const postId = postRow.id as number
 
-      const { error: pmErr } = await supabase.from("post_metrics_snapshots").insert({
+      const snapshotRow: PostMetricSnapshotInsert = {
         post_id: postId,
         views: item.viewsLike ?? null,
         likes,
@@ -190,7 +253,9 @@ export default Deno.serve(async () => {
         comment_view_rate: item.viewsLike && item.viewsLike > 0 ? comments / item.viewsLike : 0,
         captured_at: nowIso,
         created_at: nowIso,
-      } as any)
+      }
+
+      const { error: pmErr } = await supabase.from("post_metrics_snapshots").insert(snapshotRow)
 
       if (pmErr) throw new Error(`post_metrics insert failed: ${pmErr.message}`)
 
@@ -217,13 +282,8 @@ export default Deno.serve(async () => {
       .eq("account_id", accountId)
       .eq("metric_date", today)
 
-    return new Response(JSON.stringify({ ok: true, accountId, topPostsSynced: top.length }), {
-      headers: { "content-type": "application/json" },
-    })
+    return jsonResponse({ ok: true, accountId, topPostsSynced: top.length })
   } catch (e) {
-    return new Response(JSON.stringify({ ok: false, error: String(e) }), {
-      status: 400,
-      headers: { "content-type": "application/json" },
-    })
+    return jsonResponse({ ok: false, error: String(e) }, 400)
   }
 })

@@ -1,18 +1,26 @@
 import { supabase } from "@/lib/supabase";
+import {
+  isMissingSchemaObjectError,
+  readableSupabaseError,
+  type SupabaseErrorLike,
+} from "@/lib/supabaseErrors";
 import type { CampaignCustomCalendarEvent } from "../types";
+import type { CampaignCalendarEventType } from "../types";
 
-type SupabaseErrorLike = {
-  message?: string;
-  details?: string;
-  hint?: string;
-  code?: string;
-};
+const CAMPAIGN_EVENT_TYPES: CampaignCalendarEventType[] = [
+  "campaign",
+  "review",
+  "influencer",
+  "deliverable",
+  "task",
+  "custom",
+];
 
 export type CampaignCustomCalendarEventInput = {
   campaignId: number | string;
   title: string;
   eventDate: string;
-  eventType: string;
+  eventType: CampaignCalendarEventType;
   description: string;
 };
 
@@ -22,12 +30,25 @@ export type CampaignCustomCalendarEventsResult = {
 };
 
 const isMissingCalendarEventsTable = (error: SupabaseErrorLike) =>
-  error.code === "PGRST205" ||
-  error.message?.includes("campaign_calendar_events") ||
-  error.details?.includes("campaign_calendar_events");
+  isMissingSchemaObjectError(error, ["campaign_calendar_events"]);
 
-const readableSupabaseError = (error: SupabaseErrorLike) =>
-  [error.message, error.details, error.hint, error.code].filter(Boolean).join(" / ");
+const assertCampaignOwnership = async ({
+  campaignId,
+  userId,
+}: {
+  campaignId: number | string;
+  userId: string;
+}) => {
+  const { data, error } = await supabase
+    .from("campaigns")
+    .select("id")
+    .eq("id", campaignId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) throw new Error(readableSupabaseError(error));
+  if (!data) throw new Error("このキャンペーン予定を更新する権限がありません。");
+};
 
 export const fetchCampaignCustomCalendarEvents = async (
   campaignId: number | string
@@ -55,11 +76,18 @@ export const fetchCampaignCustomCalendarEvents = async (
 
 export const createCampaignCustomCalendarEvent = async ({
   campaignId,
+  userId,
   title,
   eventDate,
   eventType,
   description,
-}: CampaignCustomCalendarEventInput): Promise<CampaignCustomCalendarEvent> => {
+}: CampaignCustomCalendarEventInput & { userId: string }): Promise<CampaignCustomCalendarEvent> => {
+  await assertCampaignOwnership({ campaignId, userId });
+
+  if (!CAMPAIGN_EVENT_TYPES.includes(eventType)) {
+    throw new Error("無効な予定タイプです。");
+  }
+
   const { data, error } = await supabase
     .from("campaign_calendar_events")
     .insert({
@@ -83,11 +111,22 @@ export const createCampaignCustomCalendarEvent = async ({
   return data as CampaignCustomCalendarEvent;
 };
 
-export const deleteCampaignCustomCalendarEvent = async (eventId: number) => {
+export const deleteCampaignCustomCalendarEvent = async ({
+  eventId,
+  campaignId,
+  userId,
+}: {
+  eventId: number;
+  campaignId: number | string;
+  userId: string;
+}) => {
+  await assertCampaignOwnership({ campaignId, userId });
+
   const { error } = await supabase
     .from("campaign_calendar_events")
     .delete()
-    .eq("id", eventId);
+    .eq("id", eventId)
+    .eq("campaign_id", campaignId);
 
   if (error) {
     if (isMissingCalendarEventsTable(error)) {

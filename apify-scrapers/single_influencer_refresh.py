@@ -12,39 +12,19 @@ Usage:
 """
 
 import argparse
-import importlib.util
-import os
-import sys
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
-import requests
 from dotenv import load_dotenv
+from lib.env import env_int, must_env, today_iso, utcnow_iso
+from lib.job_runs import record_job_run
+from lib.platform_adapters import PlatformModuleLoader
+from lib.schema_contract import contract_columns
+from lib.supabase_rest import create_supabase_rest
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 load_dotenv(SCRIPT_DIR / ".env")
 load_dotenv()
-
-
-def must_env(key: str) -> str:
-    value = os.getenv(key)
-    if not value:
-        raise RuntimeError(f"Missing env var: {key}")
-    return value.strip()
-
-
-def env_int(key: str, default: int) -> int:
-    value = os.getenv(key)
-    return int(value) if value and value.strip() else default
-
-
-def utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def today_iso() -> str:
-    return datetime.now(timezone.utc).date().isoformat()
 
 
 SUPABASE_URL = must_env("SUPABASE_URL").rstrip("/")
@@ -58,134 +38,11 @@ MODULE_PATHS = {
     "youtube": SCRIPT_DIR / "youtube" / "ingest_trending_youtube.py",
     "x": SCRIPT_DIR / "X" / "ingest_trending_x.py",
 }
-
-
-def load_platform_module(platform: str):
-    module_path = MODULE_PATHS[platform]
-    module_dir = str(module_path.parent)
-    if module_dir not in sys.path:
-        sys.path.insert(0, module_dir)
-
-    module_name = f"single_refresh_{platform}"
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load platform module: {module_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def sb_headers() -> Dict[str, str]:
-    return {
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-
-
-def sb_get(
-    table: str,
-    params: Dict[str, str],
-    range_from: int = 0,
-    range_to: int = 99,
-) -> List[Dict[str, Any]]:
-    url = f"{SUPABASE_URL}/rest/v1/{table}"
-    headers = sb_headers()
-    headers["Range"] = f"{range_from}-{range_to}"
-    response = requests.get(url, headers=headers, params=params, timeout=60)
-    if not response.ok:
-        raise RuntimeError(f"GET {table} failed: {response.status_code} {response.text[:500]}")
-    data = response.json()
-    return data if isinstance(data, list) else []
-
-
-def sb_patch(table: str, params: Dict[str, str], payload: Dict[str, Any]) -> None:
-    if not payload:
-        return
-    url = f"{SUPABASE_URL}/rest/v1/{table}"
-    response = requests.patch(url, headers=sb_headers(), params=params, json=payload, timeout=60)
-    if not response.ok:
-        raise RuntimeError(f"PATCH {table} failed: {response.status_code} {response.text[:500]}")
-
-
-def sb_upsert(
-    table: str,
-    rows: List[Dict[str, Any]],
-    *,
-    on_conflict: Optional[str] = None,
-    returning: bool = False,
-) -> List[Dict[str, Any]]:
-    if not rows:
-        return []
-    url = f"{SUPABASE_URL}/rest/v1/{table}"
-    headers = sb_headers()
-    headers["Prefer"] = "resolution=merge-duplicates,return=representation" if returning else "resolution=merge-duplicates"
-    params: Dict[str, str] = {}
-    if on_conflict:
-        params["on_conflict"] = on_conflict
-    response = requests.post(url, headers=headers, params=params, json=rows, timeout=60)
-    if not response.ok:
-        raise RuntimeError(f"UPSERT {table} failed: {response.status_code} {response.text[:500]}")
-    if not returning:
-        return []
-    data = response.json()
-    return data if isinstance(data, list) else []
-
-
-def table_columns(table: str) -> set[str]:
-    fallback = {
-        "sns_accounts": {
-            "id",
-            "platform",
-            "platform_user_id",
-            "platform_profile_id",
-            "account_name",
-            "account_url",
-            "caption",
-            "profile_image_url",
-            "is_verified",
-            "business_account",
-            "country",
-            "language",
-            "last_profile_scraped_at",
-            "last_posts_scraped_at",
-            "updated_at",
-        },
-        "accounts_metrics": {
-            "account_id",
-            "metric_date",
-            "followers",
-            "following",
-            "posts",
-            "maximum_likes",
-            "created_at",
-        },
-        "analysis_job_runs": {
-            "analysis_name",
-            "account_id",
-            "platform",
-            "status",
-            "rows_written",
-            "error_message",
-            "details",
-            "analysis_version",
-            "started_at",
-            "finished_at",
-        },
-    }
-    try:
-        rows = sb_get(table, {"select": "*", "limit": "1"})
-        if rows:
-            return set(rows[0].keys())
-    except Exception:
-        pass
-    return fallback.get(table, set())
-
-
-SNS_ACCOUNT_COLUMNS = table_columns("sns_accounts")
-ACCOUNTS_METRICS_COLUMNS = table_columns("accounts_metrics")
-JOB_RUN_COLUMNS = table_columns("analysis_job_runs")
+SUPABASE = create_supabase_rest(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+MODULE_LOADER = PlatformModuleLoader(SCRIPT_DIR, {})
+SNS_ACCOUNT_COLUMNS = contract_columns("sns_accounts")
+ACCOUNTS_METRICS_COLUMNS = contract_columns("accounts_metrics")
+JOB_RUN_COLUMNS = contract_columns("analysis_job_runs")
 
 
 def filter_columns(table: str, row: Dict[str, Any]) -> Dict[str, Any]:
@@ -195,6 +52,13 @@ def filter_columns(table: str, row: Dict[str, Any]) -> Dict[str, Any]:
         "analysis_job_runs": JOB_RUN_COLUMNS,
     }.get(table, set())
     return {key: value for key, value in row.items() if not columns or key in columns}
+
+
+def load_platform_module(platform: str):
+    module_path = MODULE_PATHS.get(platform)
+    if module_path is None:
+        raise RuntimeError(f"Unsupported platform module: {platform}")
+    return MODULE_LOADER.load_from_path(platform, module_path)
 
 
 def record_refresh_run(
@@ -207,32 +71,23 @@ def record_refresh_run(
     details: Optional[Dict[str, Any]] = None,
     started_at: Optional[str] = None,
 ) -> None:
-    if not JOB_RUN_COLUMNS:
-        return
-    row = filter_columns(
-        "analysis_job_runs",
-        {
-            "analysis_name": "single_influencer_refresh",
-            "account_id": account_id,
-            "platform": platform,
-            "status": status,
-            "rows_written": rows_written,
-            "error_message": error_message[:1000] if error_message else None,
-            "details": details or {},
-            "analysis_version": "v1",
-            "started_at": started_at or utcnow_iso(),
-            "finished_at": utcnow_iso(),
-        },
+    record_job_run(
+        SUPABASE,
+        JOB_RUN_COLUMNS,
+        analysis_name="single_influencer_refresh",
+        account_id=account_id,
+        platform=platform,
+        status=status,
+        rows_written=rows_written,
+        error_message=error_message,
+        details=details,
+        analysis_version="v1",
+        started_at=started_at,
     )
-    try:
-        sb_upsert("analysis_job_runs", [row])
-    except Exception:
-        # Refreshing the account is more important than job telemetry.
-        return
 
 
 def get_account(account_id: int) -> Dict[str, Any]:
-    rows = sb_get(
+    rows = SUPABASE.get(
         "sns_accounts",
         {
             "select": (
@@ -267,7 +122,7 @@ def account_username(account: Dict[str, Any]) -> str:
 
 
 def patch_account(account_id: int, payload: Dict[str, Any]) -> None:
-    sb_patch("sns_accounts", {"id": f"eq.{account_id}"}, filter_columns("sns_accounts", payload))
+    SUPABASE.patch("sns_accounts", {"id": f"eq.{account_id}"}, filter_columns("sns_accounts", payload))
 
 
 def upsert_account_metrics(
@@ -290,7 +145,7 @@ def upsert_account_metrics(
             "created_at": utcnow_iso(),
         },
     )
-    sb_upsert("accounts_metrics", [row], on_conflict="account_id,metric_date")
+    SUPABASE.upsert("accounts_metrics", [row], on_conflict="account_id,metric_date")
 
 
 def refresh_instagram(account: Dict[str, Any], *, include_posts: bool) -> Dict[str, int]:
@@ -464,6 +319,21 @@ def refresh_x(account: Dict[str, Any], *, include_posts: bool) -> Dict[str, int]
     return {"profile_rows": 1, "metric_rows": 1, "post_items": posts_written}
 
 
+PLATFORM_REFRESHERS: Dict[str, Callable[[Dict[str, Any], bool], Dict[str, int]]] = {
+    "instagram": refresh_instagram,
+    "tiktok": refresh_tiktok,
+    "youtube": refresh_youtube,
+    "x": refresh_x,
+}
+
+
+def run_platform_refresh(platform: str, account: Dict[str, Any], *, include_posts: bool) -> Dict[str, int]:
+    refresher = PLATFORM_REFRESHERS.get(platform)
+    if refresher is None:
+        raise RuntimeError(f"Unsupported platform: {platform}")
+    return refresher(account, include_posts=include_posts)
+
+
 def refresh_single_influencer(
     account_id: int,
     *,
@@ -477,17 +347,7 @@ def refresh_single_influencer(
         record_refresh_run(account_id, platform, "running", started_at=started_at)
 
     try:
-        if platform == "instagram":
-            details = refresh_instagram(account, include_posts=include_posts)
-        elif platform == "tiktok":
-            details = refresh_tiktok(account, include_posts=include_posts)
-        elif platform == "youtube":
-            details = refresh_youtube(account, include_posts=include_posts)
-        elif platform == "x":
-            details = refresh_x(account, include_posts=include_posts)
-        else:
-            raise RuntimeError(f"Unsupported platform: {platform}")
-
+        details = run_platform_refresh(platform, account, include_posts=include_posts)
         rows_written = int(details.get("profile_rows", 0)) + int(details.get("metric_rows", 0)) + int(details.get("post_items", 0))
         if record_runs:
             record_refresh_run(

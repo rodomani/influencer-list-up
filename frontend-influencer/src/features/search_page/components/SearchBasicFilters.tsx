@@ -168,7 +168,7 @@ export function SearchBasicFilters({
               </SelectItem>
             )}
             {campaigns.map((campaign) => (
-              <SelectItem key={campaign.id} value={campaign.id}>
+              <SelectItem key={campaign.id} value={String(campaign.id)}>
                 {campaign.name}
               </SelectItem>
             ))}

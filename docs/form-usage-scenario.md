@@ -28,9 +28,10 @@ Current implementation paths:
 ## Scenario 2: Bookmark Influencers
 
 1. The user clicks the bookmark action on a search result.
-2. The frontend updates `sns_accounts.bookmarks` by adding or removing the user's id.
-3. The bookmark page queries `sns_accounts` where `bookmarks` contains the user's id.
-4. The user can remove bookmarks from the bookmark page.
+2. The frontend upserts or deletes a row in `user_bookmarks`.
+3. The bookmark page loads `user_bookmarks` for the current user and joins the matching `sns_accounts` rows.
+4. Folder and tag item rows point to `user_bookmarks.id` through `bookmark_id`.
+5. The user can remove bookmarks from the bookmark page.
 
 Current implementation paths:
 
@@ -52,7 +53,7 @@ Current implementation path:
 ## Scenario 4: Refresh Bookmarked Influencers
 
 1. A scheduler, developer, or operator runs `bookmarked_weekly_refresh.py`.
-2. The script finds accounts with bookmarks.
+2. The script reads bookmarked accounts from `bookmarked_accounts_for_refresh`.
 3. The script checks `analysis_job_runs` freshness.
 4. Due accounts have posts/comments refreshed and analysis steps run.
 5. Step-level statuses are written to `analysis_job_runs`.
@@ -85,7 +86,7 @@ sequenceDiagram
   UI-->>User: Results
 
   User->>UI: Bookmark account
-  UI->>DB: Update sns_accounts.bookmarks
+  UI->>DB: Insert or delete user_bookmarks row
   DB-->>UI: Bookmark saved
 
   Job->>DB: Select bookmarked accounts due for refresh

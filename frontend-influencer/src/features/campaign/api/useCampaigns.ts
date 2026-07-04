@@ -1,4 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import {
+  CAMPAIGN_STATUS_OPTIONS,
+  isCampaignStatusValue,
+  type CampaignStatusValue,
+} from "../logic/campaignStatus";
 import type { Campaign } from "../types";
 import {
   buildCampaignDashboardSummary,
@@ -13,21 +18,42 @@ export const useCampaigns = (userId: string | undefined) => {
   const [updatingStatusId, setUpdatingStatusId] = useState<number | string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+
     const loadCampaigns = async () => {
-      if (!userId) return;
-      setLoading(true);
-      setError(null);
+      if (!userId) {
+        if (!cancelled) {
+          setCampaigns([]);
+          setLoading(false);
+        }
+        return;
+      }
+      if (!cancelled) {
+        setLoading(true);
+        setError(null);
+      }
 
       try {
-        setCampaigns(await fetchCampaigns(userId));
+        const nextCampaigns = await fetchCampaigns(userId);
+        if (!cancelled) {
+          setCampaigns(nextCampaigns);
+        }
       } catch (fetchError) {
-        setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+        if (!cancelled) {
+          setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     };
 
     loadCampaigns();
+
+    return () => {
+      cancelled = true;
+    };
   }, [userId]);
 
   const groupedCampaigns = useMemo(
@@ -39,9 +65,18 @@ export const useCampaigns = (userId: string | undefined) => {
     [campaigns]
   );
 
-  const handleStatusChange = async (campaign: Campaign, status: string) => {
+  const handleStatusChange = async (
+    campaign: Campaign,
+    status: CampaignStatusValue | string
+  ) => {
     if (!userId) {
       setError("ログインしてからステータスを変更してね。");
+      return;
+    }
+    if (!isCampaignStatusValue(status)) {
+      setError(
+        `無効なステータスです。有効な値: ${CAMPAIGN_STATUS_OPTIONS.map((option) => option.value).join(", ")}`
+      );
       return;
     }
 

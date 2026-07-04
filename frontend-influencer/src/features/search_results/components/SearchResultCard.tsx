@@ -1,15 +1,8 @@
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
 import star from "@/assets/star.png";
 import starToggle from "@/assets/star-2.png";
-import type { CampaignOption, InfluencerNormalized } from "../types";
+import { useEffect, useState } from "react";
+import type { InfluencerNormalized } from "../types";
 import {
   dataFreshness,
   formatDateYmd,
@@ -23,37 +16,24 @@ type SearchResultCardProps = {
   influencer: InfluencerNormalized;
   userId: string | undefined;
   isSelectedForCompare: boolean;
-  dialogOpen: boolean;
-  campaigns: CampaignOption[];
-  campaignsLoading: boolean;
-  campaignsError: string | null;
-  savingCampaignId: string | null;
-  selectedInfluencerName: string;
-  onOpenDialogChange: (open: boolean) => void;
   onNavigateToDetail: (id: number) => void;
   onToggleCompare: (influencer: InfluencerNormalized) => void;
   onToggleBookmark: (influencer: InfluencerNormalized) => void;
   onSelectCampaignTarget: (influencer: InfluencerNormalized) => void;
-  onAddToCampaign: (campaignId: string) => void;
+  onOpenCampaignDialog: (open: boolean) => void;
 };
 
 export function SearchResultCard({
   influencer,
   userId,
   isSelectedForCompare,
-  dialogOpen,
-  campaigns,
-  campaignsLoading,
-  campaignsError,
-  savingCampaignId,
-  selectedInfluencerName,
-  onOpenDialogChange,
   onNavigateToDetail,
   onToggleCompare,
   onToggleBookmark,
   onSelectCampaignTarget,
-  onAddToCampaign,
+  onOpenCampaignDialog,
 }: SearchResultCardProps) {
+  const [imageFailed, setImageFailed] = useState(false);
   const metrics = influencer.accounts_metrics;
   const freshestDate = mostRecentTimestamp(
     metrics?.metric_date,
@@ -62,32 +42,32 @@ export function SearchResultCard({
   );
   const freshness = dataFreshness(freshestDate);
   const keywordList = splitKeywords(influencer.keywords);
+  const isBookmarked = influencer.hasUserBookmark;
+  const showProfileImage = Boolean(influencer.profile_image_url) && !imageFailed;
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [influencer.id, influencer.profile_image_url]);
 
   return (
     <article
-      className={`group w-full max-w-full cursor-pointer overflow-hidden border bg-white shadow-[0_20px_70px_-54px_rgba(15,23,42,0.28)] transition duration-300 hover:-translate-y-0.5 hover:border-[#D4AF37]/70 hover:shadow-[0_28px_90px_-60px_rgba(15,23,42,0.42)] ${
+      className={`group w-full max-w-full overflow-hidden border bg-white shadow-[0_20px_70px_-54px_rgba(15,23,42,0.28)] transition duration-300 hover:-translate-y-0.5 hover:border-[#D4AF37]/70 hover:shadow-[0_28px_90px_-60px_rgba(15,23,42,0.42)] ${
         isSelectedForCompare
           ? "border-[#046307] ring-2 ring-[#046307]/15"
           : "border-slate-200"
       }`}
-      role="button"
-      tabIndex={0}
-      onClick={() => onNavigateToDetail(influencer.id)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onNavigateToDetail(influencer.id);
-        }
-      }}
     >
       <div className="grid min-w-0 gap-6 p-5 sm:p-7 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1.1fr)] xl:items-center 2xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.1fr)_minmax(0,0.8fr)_minmax(0,0.62fr)]">
         <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-center">
-          {influencer.profile_image_url ? (
+          {showProfileImage ? (
             <img
-              src={influencer.profile_image_url}
+              src={influencer.profile_image_url ?? undefined}
               alt={`${influencer.account_name} profile`}
               className="h-20 w-20 shrink-0 rounded-full border border-[#D4AF37]/50 object-cover p-1"
               loading="lazy"
+              onError={() => {
+                setImageFailed(true);
+              }}
             />
           ) : (
             <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-xl font-black uppercase text-slate-400">
@@ -182,70 +162,44 @@ export function SearchResultCard({
               size="sm"
               variant="outline"
               className="h-auto min-h-10 w-full whitespace-normal border-slate-300 bg-white px-3 py-2 text-center text-xs leading-tight text-slate-900 hover:border-[#D4AF37] sm:flex-1 xl:flex-none"
-              aria-pressed={influencer.bookmarks.includes(userId)}
+              aria-pressed={isBookmarked}
+              aria-label={isBookmarked ? "ブックマーク解除" : "ブックマーク追加"}
               onClick={(event) => {
                 event.stopPropagation();
                 onToggleBookmark(influencer);
               }}
             >
-              {influencer.bookmarks.includes(userId) ? (
-                <img src={starToggle} alt="お気に入り" className="h-5 w-5 shrink-0" />
+              {isBookmarked ? (
+                <img src={starToggle} alt="" aria-hidden="true" className="h-5 w-5 shrink-0" />
               ) : (
-                <img src={star} alt="お気に入り" className="h-5 w-5 shrink-0" />
+                <img src={star} alt="" aria-hidden="true" className="h-5 w-5 shrink-0" />
               )}
               <span className="min-w-0 break-words">ブックマーク</span>
             </Button>
           ) : null}
 
-          <Dialog open={dialogOpen} onOpenChange={onOpenDialogChange}>
-            <DialogTrigger asChild>
-              <Button
-                className="h-auto min-h-10 w-full whitespace-normal bg-[#046307] px-3 py-2 text-center text-xs font-black uppercase leading-tight tracking-[0.08em] text-white hover:bg-[#034d06] sm:flex-1 xl:flex-none"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onSelectCampaignTarget(influencer);
-                }}
-              >
-                キャンペーンに追加
-              </Button>
-            </DialogTrigger>
-
-            <DialogContent className="border border-slate-200 bg-white text-slate-950">
-              <DialogHeader>
-                <DialogTitle className="text-xl font-black uppercase tracking-[0.12em] text-slate-950">
-                  キャンペーンを選択
-                </DialogTitle>
-                <DialogDescription className="text-slate-500">
-                  {selectedInfluencerName || "このインフルエンサー"}を追加するキャンペーンを選んでください。
-                </DialogDescription>
-              </DialogHeader>
-
-              {campaignsLoading && (
-                <p className="text-sm text-slate-500">キャンペーンを読み込み中...</p>
-              )}
-              {campaignsError && (
-                <p className="text-sm text-red-600">エラー: {campaignsError}</p>
-              )}
-              {!campaignsLoading && campaigns.length === 0 && (
-                <p className="text-sm text-slate-500">キャンペーンが見つかりません。</p>
-              )}
-
-              <div className="flex flex-col gap-2">
-                {campaigns.map((campaign) => (
-                  <Button
-                    key={campaign.id}
-                    variant="outline"
-                    className="justify-start border-slate-300 bg-white text-slate-900 hover:border-[#D4AF37]"
-                    disabled={savingCampaignId === campaign.id}
-                    onClick={() => onAddToCampaign(campaign.id)}
-                  >
-                    {savingCampaignId === campaign.id ? "保存中..." : campaign.name}
-                  </Button>
-                ))}
-              </div>
-            </DialogContent>
-          </Dialog>
+          <Button
+            className="h-auto min-h-10 w-full whitespace-normal bg-[#046307] px-3 py-2 text-center text-xs font-black uppercase leading-tight tracking-[0.08em] text-white hover:bg-[#034d06] sm:flex-1 xl:flex-none"
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelectCampaignTarget(influencer);
+              onOpenCampaignDialog(true);
+            }}
+          >
+            キャンペーンに追加
+          </Button>
         </div>
+      </div>
+
+      <div className="border-t border-slate-200 bg-[#f9fafb] px-5 py-4 sm:px-7">
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full border-slate-300 bg-white text-slate-900 hover:border-[#D4AF37]"
+          onClick={() => onNavigateToDetail(influencer.id)}
+        >
+          詳細を見る
+        </Button>
       </div>
     </article>
   );

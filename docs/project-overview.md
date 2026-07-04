@@ -24,8 +24,10 @@ The backend also runs scheduled scraping and analysis jobs so bookmarked influen
 ### Bookmarks
 
 - Users can bookmark influencers directly from search results or the bookmark screen.
-- Bookmarks are stored on `sns_accounts.bookmarks` as user id values.
+- Bookmark rows are stored in `user_bookmarks` with one row per `user_id + account_id`.
+- Bookmark metadata such as priority, rating, readiness, memo, source, checklist, risk, price, contact info, and snapshot live on `user_bookmarks`.
 - Bookmarked accounts are the normal input set for the weekly refresh pipeline.
+- See `docs/bookmark-data-model.md` for the bookmark row shape and relation model.
 
 ### Campaigns
 

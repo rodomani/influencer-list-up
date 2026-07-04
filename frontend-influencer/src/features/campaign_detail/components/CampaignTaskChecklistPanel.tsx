@@ -71,20 +71,21 @@ export function CampaignTaskChecklistPanel({
         <div className="mt-5 grid gap-3 lg:grid-cols-2">
           {tasks.map((task) => {
             const isUpdating = updatingTaskId === task.id;
+            const isDisabled = isUpdating || !persistenceReady || task.id < 0;
 
             return (
               <label
                 key={task.id}
-                className={`flex cursor-pointer items-start gap-4 border p-4 transition ${
+                className={`flex items-start gap-4 border p-4 transition ${
                   task.completed
                     ? "border-[#86b89a] bg-[#f5fbf7]"
                     : "border-slate-200 bg-white hover:border-[#D4AF37]/70"
-                } ${isUpdating ? "opacity-60" : ""}`}
+                } ${isDisabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
               >
                 <input
                   type="checkbox"
                   checked={task.completed}
-                  disabled={isUpdating}
+                  disabled={isDisabled}
                   onChange={(event) => onToggle(task.id, event.target.checked)}
                   className="mt-1 h-5 w-5 shrink-0 accent-[#86b89a]"
                 />

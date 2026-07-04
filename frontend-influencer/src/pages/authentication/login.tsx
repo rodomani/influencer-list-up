@@ -1,13 +1,52 @@
-import { useState } from 'react';
-import type { FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useAuth } from '@/contexts/AuthContext';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { useState } from "react";
+import type { FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
+import { readableSupabaseError } from "@/lib/supabaseErrors";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+
+const toLoginErrorMessage = (error: unknown) => {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : typeof error === "object" && error
+          ? readableSupabaseError(error as Record<string, string>)
+          : "";
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.includes("invalid login credentials") ||
+    normalized.includes("invalid credentials")
+  ) {
+    return "メールアドレスまたはパスワードが正しくありません。";
+  }
+
+  if (
+    normalized.includes("email not confirmed") ||
+    normalized.includes("please verify your email")
+  ) {
+    return "メール確認がまだ完了していません。確認メールのリンクを開いてください。";
+  }
+
+  if (normalized.includes("too many requests")) {
+    return "試行回数が多すぎます。少し待ってからもう一度お試しください。";
+  }
+
+  if (normalized.includes("network") || normalized.includes("fetch")) {
+    return "通信に失敗しました。接続を確認してからもう一度お試しください。";
+  }
+
+  return "ログインに失敗しました。入力内容を確認してもう一度お試しください。";
+};
 
 export function LoginPage() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const { signIn } = useAuth();
@@ -15,18 +54,29 @@ export function LoginPage() {
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (loading) return;
+
     setError(null);
     setLoading(true);
 
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedPassword = password;
+
+    if (!normalizedEmail || !normalizedPassword) {
+      setError("メールアドレスとパスワードを入力してください。");
+      setLoading(false);
+      return;
+    }
+
     try {
-      const { error } = await signIn(email, password);
+      const { error } = await signIn(normalizedEmail, normalizedPassword);
       if (error) {
-        setError(error.message || 'ログインに失敗しました');
+        setError(toLoginErrorMessage(error));
       } else {
-        navigate('/home');
+        navigate("/home");
       }
     } catch {
-      setError('予期しないエラーが発生しました');
+      setError("予期しないエラーが発生しました。しばらくしてからもう一度お試しください。");
     } finally {
       setLoading(false);
     }
@@ -44,31 +94,31 @@ export function LoginPage() {
           <div className="deco-rule mb-6" />
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <label htmlFor="email" className="deco-label">
+              <Label htmlFor="email">
                 メールアドレス
-              </label>
-              <input
+              </Label>
+              <Input
                 id="email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="h-11 w-full border px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
+                autoComplete="email"
                 placeholder="mail@example.com"
                 disabled={loading}
               />
             </div>
             <div className="space-y-2">
-              <label htmlFor="password" className="deco-label">
+              <Label htmlFor="password">
                 パスワード
-              </label>
-              <input
+              </Label>
+              <Input
                 id="password"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="h-11 w-full border px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary"
+                autoComplete="current-password"
                 placeholder="••••••••"
                 disabled={loading}
               />

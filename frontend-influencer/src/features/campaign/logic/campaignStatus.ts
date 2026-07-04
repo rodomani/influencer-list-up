@@ -8,5 +8,10 @@ export const CAMPAIGN_STATUS_OPTIONS = [
 
 export type CampaignStatusValue = (typeof CAMPAIGN_STATUS_OPTIONS)[number]["value"];
 
+export const isCampaignStatusValue = (
+  value: string | null | undefined
+): value is CampaignStatusValue =>
+  CAMPAIGN_STATUS_OPTIONS.some((option) => option.value === value);
+
 export const campaignStatusLabel = (status: string | null | undefined) =>
   CAMPAIGN_STATUS_OPTIONS.find((option) => option.value === status)?.label ?? "下書き";

@@ -32,7 +32,7 @@ flowchart LR
 
 The frontend reads and writes Supabase data directly for the current product screens:
 
-- `sns_accounts` and `accounts_metrics` for home, search, results, detail, and bookmarks.
+- `sns_accounts`, `accounts_metrics`, and `user_bookmarks` for home, search, results, detail, and bookmarks.
 - `influencer_average_comment_analysis` for influencer detail analysis cards.
 - `campaigns` for campaign CRUD and add-to-campaign actions.
 - `users` for email verification state.
@@ -60,7 +60,7 @@ Platform-specific scripts ingest profiles, posts, comments, and metrics. The rec
 
 That script coordinates:
 
-- bookmarked account selection from `sns_accounts.bookmarks`
+- bookmarked account selection from `bookmarked_accounts_for_refresh`, backed by `user_bookmarks`
 - platform-specific post refresh
 - post comment analysis
 - post commenter quality analysis

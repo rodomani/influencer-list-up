@@ -1,50 +1,80 @@
 import { serve } from "https://deno.land/std@0.192.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import { handleCors, jsonResponse, readBearerToken } from "../_shared/http.ts"
+
+const MAX_NAME_LENGTH = 120
+const MAX_DESCRIPTION_LENGTH = 2000
+const MAX_GOAL_LENGTH = 500
+const ALLOWED_CAMPAIGN_STATUSES = new Set([
+  "draft",
+  "ongoing",
+  "complete",
+  "paused",
+  "needs_review",
+])
 
 // Creates a campaign for the authenticated user with simple validation.
 serve(async (req) => {
+  const corsResponse = handleCors(req)
+  if (corsResponse) return corsResponse
+
   if (req.method !== "POST") {
-    return new Response(JSON.stringify({ error: "Method not allowed" }), {
-      status: 405,
-      headers: { "Content-Type": "application/json" },
-    })
+    return jsonResponse({ error: "Method not allowed" }, 405)
   }
 
   const SUPABASE_URL = Deno.env.get("SUPABASE_URL")
   const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
-    return new Response(JSON.stringify({ error: "Missing Supabase env vars" }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    })
+    return jsonResponse({ error: "Missing Supabase env vars" }, 500)
   }
 
-  const authHeader = req.headers.get("authorization")
-  const token = authHeader?.replace("Bearer ", "")
-  if (!token) {
-    return new Response(JSON.stringify({ error: "Missing bearer token" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    })
+  let token = ""
+  try {
+    token = readBearerToken(req)
+  } catch (error) {
+    return jsonResponse({ error: error instanceof Error ? error.message : "Missing bearer token" }, 401)
   }
 
   const body = await req.json().catch(() => ({}))
   const { name, description, start_date, end_date, budget, goal, status } = body
 
-  if (!name) {
-    return new Response(JSON.stringify({ error: "name is required" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
-    })
+  const normalizedName = typeof name === "string" ? name.trim() : ""
+  if (!normalizedName) {
+    return jsonResponse({ error: "name is required" }, 400)
+  }
+  if (normalizedName.length > MAX_NAME_LENGTH) {
+    return jsonResponse({ error: `name must be at most ${MAX_NAME_LENGTH} characters` }, 400)
+  }
+
+  const normalizedDescription =
+    typeof description === "string" ? description.trim() : ""
+  if (normalizedDescription.length > MAX_DESCRIPTION_LENGTH) {
+    return jsonResponse({ error: `description must be at most ${MAX_DESCRIPTION_LENGTH} characters` }, 400)
+  }
+
+  const normalizedGoal = typeof goal === "string" ? goal.trim() : ""
+  if (normalizedGoal.length > MAX_GOAL_LENGTH) {
+    return jsonResponse({ error: `goal must be at most ${MAX_GOAL_LENGTH} characters` }, 400)
   }
 
   const startDate = start_date ? new Date(start_date) : null
   const endDate = end_date ? new Date(end_date) : null
   if (startDate && endDate && endDate < startDate) {
-    return new Response(JSON.stringify({ error: "end_date must be after start_date" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
-    })
+    return jsonResponse({ error: "end_date must be after start_date" }, 400)
+  }
+
+  const parsedBudget =
+    budget === null || budget === undefined || budget === ""
+      ? null
+      : Number(budget)
+  if (parsedBudget !== null && (!Number.isFinite(parsedBudget) || parsedBudget < 0)) {
+    return jsonResponse({ error: "budget must be a nonnegative number" }, 400)
+  }
+
+  const normalizedStatus =
+    typeof status === "string" && status.trim() ? status.trim() : "draft"
+  if (!ALLOWED_CAMPAIGN_STATUSES.has(normalizedStatus)) {
+    return jsonResponse({ error: "Invalid campaign status" }, 400)
   }
 
   const serverClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
@@ -53,36 +83,27 @@ serve(async (req) => {
 
   const { data: userResult, error: userError } = await serverClient.auth.getUser()
   if (userError || !userResult.user) {
-    return new Response(JSON.stringify({ error: "Invalid user" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    })
+    return jsonResponse({ error: "Invalid user" }, 401)
   }
 
   const { data, error } = await serverClient
     .from("campaigns")
     .insert({
       user_id: userResult.user.id,
-      name,
-      description: description ?? null,
+      name: normalizedName,
+      description: normalizedDescription || null,
       start_date: startDate ? startDate.toISOString().split("T")[0] : null,
       end_date: endDate ? endDate.toISOString().split("T")[0] : null,
-      budget: typeof budget === "number" ? budget : budget ? Number(budget) : null,
-      goal: goal ?? null,
-      status: status ?? "draft",
+      budget: parsedBudget,
+      goal: normalizedGoal || null,
+      status: normalizedStatus,
     })
     .select()
     .single()
 
   if (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
-    })
+    return jsonResponse({ error: error.message }, 400)
   }
 
-  return new Response(JSON.stringify({ campaign: data }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  })
+  return jsonResponse({ campaign: data }, 200)
 })

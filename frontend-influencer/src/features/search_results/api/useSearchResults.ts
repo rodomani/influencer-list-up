@@ -1,21 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import type {
-  CampaignOption,
-  CampaignTargetInfluencer,
-  Filters,
-  InfluencerNormalized,
-  SortOption,
-} from "../types";
-import { sortInfluencers } from "../logic/sorting";
+import type { Filters, InfluencerNormalized, SortOption } from "../types";
 import {
   addUserBookmark,
-  fetchCampaignOptions,
   fetchSearchResults,
   removeUserBookmark,
-  saveBookmarkSource,
-  updateCampaignInfluencers,
 } from "./searchResultsQueries";
 import { buildSearchBookmarkSource } from "../logic/bookmarkSource";
+import { useSearchCampaignPicker } from "./useSearchCampaignPicker";
 
 const ITEMS_PER_PAGE = 10;
 const COMPARE_LIMIT = 5;
@@ -40,6 +31,7 @@ const getErrorMessage = (error: unknown): string => {
 
 export const useSearchResults = (filters: Filters | undefined, userId: string | undefined) => {
   const [influencers, setInfluencers] = useState<InfluencerNormalized[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -47,66 +39,21 @@ export const useSearchResults = (filters: Filters | undefined, userId: string | 
   const [compareError, setCompareError] = useState<string | null>(null);
   const [sortOption, setSortOption] = useState<SortOption>("recommended");
 
-  const [campaigns, setCampaigns] = useState<CampaignOption[]>([]);
-  const [campaignsLoading, setCampaignsLoading] = useState(false);
-  const [campaignsError, setCampaignsError] = useState<string | null>(null);
-  const [savingCampaignId, setSavingCampaignId] = useState<string | null>(null);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [selectedInfluencer, setSelectedInfluencer] = useState<CampaignTargetInfluencer | null>(null);
+  const campaignPicker = useSearchCampaignPicker(userId);
 
-  const sortedInfluencers = useMemo(
-    () => sortInfluencers(influencers, sortOption),
-    [influencers, sortOption]
-  );
-
-  const totalPages = Math.max(1, Math.ceil(sortedInfluencers.length / ITEMS_PER_PAGE));
+  const totalPages = Math.max(1, Math.ceil(totalCount / ITEMS_PER_PAGE));
 
   const effectiveCurrentPage = Math.min(currentPage, totalPages);
-
-  const paginatedInfluencers = useMemo(() => {
-    const start = (effectiveCurrentPage - 1) * ITEMS_PER_PAGE;
-    return sortedInfluencers.slice(start, start + ITEMS_PER_PAGE);
-  }, [effectiveCurrentPage, sortedInfluencers]);
+  const paginatedInfluencers = influencers;
 
   const selectedCompareIds = useMemo(
     () => new Set(selectedForCompare.map((influencer) => influencer.id)),
     [selectedForCompare]
   );
 
-  const applyBookmarkState = (influencerId: number, nextBookmarks: string[]) => {
-    setInfluencers((prev) =>
-      prev.map((row) =>
-        row.id === influencerId ? { ...row, bookmarks: nextBookmarks } : row
-      )
-    );
-
-    setSelectedForCompare((prev) =>
-      prev.map((row) =>
-        row.id === influencerId ? { ...row, bookmarks: nextBookmarks } : row
-      )
-    );
-  };
-
   useEffect(() => {
-    const loadCampaigns = async () => {
-      if (!userId) return;
+    let cancelled = false;
 
-      setCampaignsLoading(true);
-      setCampaignsError(null);
-
-      try {
-        setCampaigns(await fetchCampaignOptions(userId));
-      } catch (campaignError) {
-        setCampaignsError(getErrorMessage(campaignError));
-      } finally {
-        setCampaignsLoading(false);
-      }
-    };
-
-    loadCampaigns();
-  }, [userId]);
-
-  useEffect(() => {
     const loadInfluencers = async () => {
       if (!filters) {
         setError("検索条件が見つかりません。検索画面に戻ってもう一度検索してください。");
@@ -117,60 +64,59 @@ export const useSearchResults = (filters: Filters | undefined, userId: string | 
       setLoading(true);
       setError(null);
       setCompareError(null);
-      setCurrentPage(1);
-      setSortOption("recommended");
 
       try {
-        setInfluencers(await fetchSearchResults(filters, userId));
-        setSelectedForCompare([]);
+        const result = await fetchSearchResults(
+          filters,
+          userId,
+          sortOption,
+          effectiveCurrentPage,
+          ITEMS_PER_PAGE
+        );
+
+        if (cancelled) return;
+        setInfluencers(result.influencers);
+        setTotalCount(result.totalCount);
       } catch (searchError) {
+        if (cancelled) return;
         setError(getErrorMessage(searchError));
         setInfluencers([]);
+        setTotalCount(0);
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     };
 
     loadInfluencers();
-  }, [filters, userId]);
 
-  const handleAddToCampaign = async (campaignId: string) => {
-    if (!userId || !selectedInfluencer) return;
+    return () => {
+      cancelled = true;
+    };
+  }, [filters, userId, sortOption, effectiveCurrentPage]);
 
-    setSavingCampaignId(campaignId);
+  useEffect(() => {
+    setCurrentPage(1);
+    setSortOption("recommended");
+    setSelectedForCompare([]);
+    setCompareError(null);
+  }, [filters]);
 
-    const existing = campaigns.find((campaign) => campaign.id === campaignId);
-    const existingNames =
-      existing?.influencers
-        ?.split(",")
-        .map((name) => name.trim())
-        .filter(Boolean) ?? [];
-
-    const updatedInfluencers = existingNames.includes(selectedInfluencer.account_name)
-      ? existingNames.join(", ")
-      : [...existingNames, selectedInfluencer.account_name].join(", ");
-
-    try {
-      await updateCampaignInfluencers({
-        campaignId,
-        userId,
-        accountId: selectedInfluencer.id,
-        influencers: updatedInfluencers,
-      });
-
-      if (existing) {
-        setCampaigns((prev) =>
-          prev.map((campaign) =>
-            campaign.id === campaignId ? { ...campaign, influencers: updatedInfluencers } : campaign
-          )
-        );
-        setDialogOpen(false);
-      }
-    } catch (campaignError) {
-      setCampaignsError(getErrorMessage(campaignError));
-    } finally {
-      setSavingCampaignId(null);
-    }
+  const applyBookmarkState = (
+    influencerId: number,
+    patch: Pick<InfluencerNormalized, "hasUserBookmark" | "bookmarkId">
+  ) => {
+    setInfluencers((prev) =>
+      prev.map((row) =>
+        row.id === influencerId ? { ...row, ...patch } : row
+      )
+    );
+    setSelectedForCompare((prev) =>
+      prev.map((row) =>
+        row.id === influencerId ? { ...row, ...patch } : row
+      )
+    );
   };
 
   const handleToggleBookmark = async (influencer: InfluencerNormalized) => {
@@ -178,43 +124,42 @@ export const useSearchResults = (filters: Filters | undefined, userId: string | 
       setError("ブックマークするにはログインが必要です。");
       return;
     }
-  
-    const previousBookmarks = influencer.bookmarks ?? [];
-    const alreadyBookmarked = previousBookmarks.includes(userId);
-  
-    const nextBookmarks = alreadyBookmarked
-      ? previousBookmarks.filter((id) => id !== userId)
-      : Array.from(new Set([...previousBookmarks, userId]));
-  
-    setInfluencers((prev) =>
-      prev.map((row) =>
-        row.id === influencer.id ? { ...row, bookmarks: nextBookmarks } : row
-      )
-    );
-  
+
+    const alreadyBookmarked = influencer.hasUserBookmark;
+    applyBookmarkState(influencer.id, {
+      hasUserBookmark: !alreadyBookmarked,
+      bookmarkId: alreadyBookmarked ? undefined : influencer.bookmarkId,
+    });
+
     try {
       if (alreadyBookmarked) {
         await removeUserBookmark({
           userId,
           accountId: influencer.id,
         });
+        applyBookmarkState(influencer.id, {
+          hasUserBookmark: false,
+          bookmarkId: undefined,
+        });
       } else {
         const source = filters ? buildSearchBookmarkSource(filters) : null;
-  
-        await addUserBookmark({
+
+        const bookmarkId = await addUserBookmark({
           userId,
           accountId: influencer.id,
           source,
         });
+        applyBookmarkState(influencer.id, {
+          hasUserBookmark: true,
+          bookmarkId,
+        });
       }
     } catch (bookmarkError) {
       setError(bookmarkError instanceof Error ? bookmarkError.message : String(bookmarkError));
-  
-      setInfluencers((prev) =>
-        prev.map((row) =>
-          row.id === influencer.id ? { ...row, bookmarks: previousBookmarks } : row
-        )
-      );
+      applyBookmarkState(influencer.id, {
+        hasUserBookmark: alreadyBookmarked,
+        bookmarkId: influencer.bookmarkId,
+      });
     }
   };
 
@@ -247,6 +192,7 @@ export const useSearchResults = (filters: Filters | undefined, userId: string | 
 
   return {
     influencers,
+    totalCount,
     loading,
     error,
     currentPage,
@@ -254,14 +200,14 @@ export const useSearchResults = (filters: Filters | undefined, userId: string | 
     selectedForCompare,
     compareError,
     sortOption,
-    campaigns,
-    campaignsLoading,
-    campaignsError,
-    savingCampaignId,
-    dialogOpen,
-    setDialogOpen,
-    selectedInfluencerName: selectedInfluencer?.account_name ?? "",
-    setSelectedInfluencer,
+    campaigns: campaignPicker.campaigns,
+    campaignsLoading: campaignPicker.campaignsLoading,
+    campaignsError: campaignPicker.campaignsError,
+    savingCampaignId: campaignPicker.savingCampaignId,
+    dialogOpen: campaignPicker.dialogOpen,
+    setDialogOpen: campaignPicker.setDialogOpen,
+    selectedInfluencerName: campaignPicker.selectedInfluencerName,
+    setSelectedInfluencer: campaignPicker.setSelectedInfluencer,
     totalPages,
     effectiveCurrentPage,
     paginatedInfluencers,
@@ -269,7 +215,7 @@ export const useSearchResults = (filters: Filters | undefined, userId: string | 
     itemsPerPage: ITEMS_PER_PAGE,
     compareLimit: COMPARE_LIMIT,
     compareMinimum: COMPARE_MINIMUM,
-    handleAddToCampaign,
+    handleAddToCampaign: campaignPicker.handleAddToCampaign,
     handleToggleBookmark,
     handleToggleCompare,
     clearCompareSelection,

@@ -1,40 +1,17 @@
 import { supabase } from "@/lib/supabase";
+import {
+  isMissingSchemaObjectError,
+  readableSupabaseError,
+  type SupabaseErrorLike,
+} from "@/lib/supabaseErrors";
 import type { CampaignTask } from "../types";
 import {
   DEFAULT_CAMPAIGN_TASK_TITLES,
   buildFallbackCampaignTasks,
 } from "../logic/campaignTasks";
 
-const readableSupabaseError = (error: unknown) => {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  if (error && typeof error === "object") {
-    const maybeError = error as {
-      message?: unknown;
-      details?: unknown;
-      hint?: unknown;
-      code?: unknown;
-    };
-    return [
-      typeof maybeError.message === "string" ? maybeError.message : null,
-      typeof maybeError.details === "string" ? maybeError.details : null,
-      typeof maybeError.hint === "string" ? maybeError.hint : null,
-      typeof maybeError.code === "string" ? `code: ${maybeError.code}` : null,
-    ]
-      .filter(Boolean)
-      .join(" ");
-  }
-  return "不明なエラーが発生しました。";
-};
-
 const isMissingCampaignTasksTable = (error: unknown) => {
-  if (!error || typeof error !== "object") return false;
-  const maybeError = error as { code?: unknown; message?: unknown };
-  return (
-    maybeError.code === "PGRST205" &&
-    typeof maybeError.message === "string" &&
-    maybeError.message.includes("campaign_tasks")
-  );
+  return isMissingSchemaObjectError((error ?? {}) as SupabaseErrorLike, ["campaign_tasks"]);
 };
 
 export const fetchCampaignTasks = async (campaignId: number | string) => {
@@ -64,12 +41,13 @@ export const fetchCampaignTasks = async (campaignId: number | string) => {
 
   const { data: insertedData, error: insertError } = await supabase
     .from("campaign_tasks")
-    .insert(
+    .upsert(
       DEFAULT_CAMPAIGN_TASK_TITLES.map((title, index) => ({
         campaign_id: campaignId,
         title,
         position: index + 1,
-      }))
+      })),
+      { onConflict: "campaign_id,title" }
     )
     .select("*")
     .order("position", { ascending: true });

@@ -135,7 +135,6 @@ export function BookmarksGrid({
         <BookmarkInfluencerCard
           key={influencer.id}
           influencer={influencer}
-          userId={userId}
           folders={folders}
           tags={tags}
           updatingFolderAssignment={updatingFolderAssignment}

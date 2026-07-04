@@ -9,7 +9,6 @@ import type {
   BookmarkFolderItem,
   BookmarkMemo,
   BookmarkMetricsRow,
-  BookmarkPostActivityRow,
   BookmarkPriority,
   BookmarkPriorityValue,
   BookmarkReadiness,
@@ -21,20 +20,17 @@ import type {
   BookmarkTagItem,
 } from "../types";
 import { DEFAULT_BOOKMARK_RESEARCH_CHECKLIST } from "../types";
-import { bookmarkTimestampToMs } from "../logic/bookmarkFormatters";
+import {
+  isMissingSchemaObjectError,
+  readableSupabaseError,
+  type SupabaseErrorLike,
+} from "@/lib/supabaseErrors";
 
 const USER_BOOKMARKS_TABLE = "user_bookmarks";
 const BOOKMARK_FOLDERS_TABLE = "bookmark_folders";
 const BOOKMARK_FOLDER_ITEMS_TABLE = "bookmark_folder_items";
 const BOOKMARK_TAGS_TABLE = "bookmark_tags";
 const BOOKMARK_TAG_ITEMS_TABLE = "bookmark_tag_items";
-
-type SupabaseErrorLike = {
-  message?: string;
-  details?: string;
-  hint?: string;
-  code?: string;
-};
 
 type UserBookmarkRow = {
   id: number;
@@ -66,9 +62,22 @@ type SnsAccountBookmarkRow = {
   account_name: string;
   gender: string | null;
   keywords: string | null;
-  profile_image_url: string;
+  profile_image_url: string | null;
   last_profile_scraped_at: string | null;
-  accounts_metrics: BookmarkMetricsRow[] | null;
+};
+
+type LatestAccountMetricRow = {
+  account_id: number | null;
+  followers: number | null;
+  posts: number | null;
+  maximum_likes: number | null;
+  metric_date: string | null;
+};
+
+type LatestActivityRow = {
+  account_id: number | null;
+  latest_posted_at: string | null;
+  latest_activity_at: string | null;
 };
 
 type BookmarkFolderItemDbRow = {
@@ -90,26 +99,30 @@ type BookmarkMutationPayload = {
   accountId: number;
 };
 
-const readableSupabaseError = (error: SupabaseErrorLike | null | undefined) => {
-  if (!error) return "Supabase request failed.";
+const USER_BOOKMARK_IDENTIFIERS = [
+  USER_BOOKMARKS_TABLE,
+  "priority",
+  "personal_rating",
+  "candidate_readiness",
+  "risk_level",
+  "risk_notes",
+  "estimated_price_min",
+  "estimated_price_max",
+  "price_note",
+  "price_checked_at",
+  "contact_info",
+  "saved_snapshot",
+  "research_checklist",
+  "saved_reason",
+  "private_memo",
+  "saved_source",
+  "saved_source_detail",
+];
 
-  const message = [
-    error.message,
-    error.details,
-    error.hint,
-    error.code ? `code: ${error.code}` : null,
-  ]
-    .filter(Boolean)
-    .join(" ");
+const USER_BOOKMARK_TABLE_IDENTIFIERS = [USER_BOOKMARKS_TABLE];
 
-  return message || "Supabase request failed.";
-};
-
-const isMissingPersistenceObject = (error: SupabaseErrorLike) =>
-  error.code === "PGRST205" ||
-  error.code === "PGRST204" ||
-  error.code === "42P01" ||
-  error.code === "42703";
+const isMissingPersistenceObject = (error: SupabaseErrorLike, identifiers: string[]) =>
+  isMissingSchemaObjectError(error, identifiers);
 
 const throwReadableError = (error: SupabaseErrorLike) => {
   throw new Error(readableSupabaseError(error));
@@ -118,15 +131,15 @@ const throwReadableError = (error: SupabaseErrorLike) => {
 const throwUserBookmarksError = (error: SupabaseErrorLike) => {
   const message = readableSupabaseError(error);
 
-  if (error.code === "PGRST205" || error.code === "42P01") {
+  if (isMissingSchemaObjectError(error, USER_BOOKMARK_TABLE_IDENTIFIERS)) {
     throw new Error(
       `user_bookmarks テーブルがPostgRESTに認識されていません。SQL Editorで "NOTIFY pgrst, 'reload schema';" を実行してください。詳細: ${message}`
     );
   }
 
-  if (error.code === "PGRST204" || error.code === "42703") {
+  if (isMissingSchemaObjectError(error, USER_BOOKMARK_IDENTIFIERS)) {
     throw new Error(
-      `user_bookmarks のカラムが認識されていません。priority / personal_rating / candidate_readiness / risk_level / risk_notes / estimated_price_min / estimated_price_max / price_note / price_checked_at / contact_info / saved_snapshot / research_checklist / saved_reason / saved_source / saved_source_detail が存在するか確認してください。詳細: ${message}`
+      `user_bookmarks のカラムが認識されていません。priority / personal_rating / candidate_readiness / risk_level / risk_notes / estimated_price_min / estimated_price_max / price_note / price_checked_at / contact_info / saved_snapshot / research_checklist / saved_reason / private_memo / saved_source / saved_source_detail が存在するか確認してください。詳細: ${message}`
     );
   }
 
@@ -201,10 +214,29 @@ const toSavedSnapshot = (value: unknown): BookmarkSavedSnapshot | null => {
   };
 };
 
-const pickLatestMetric = (
-  metrics: BookmarkMetricsRow[] | null | undefined
-): BookmarkMetricsRow | null =>
-  Array.isArray(metrics) && metrics.length > 0 ? metrics[0] : null;
+const USER_BOOKMARK_SELECT = `
+  id,
+  user_id,
+  account_id,
+  priority,
+  personal_rating,
+  candidate_readiness,
+  risk_level,
+  risk_notes,
+  estimated_price_min,
+  estimated_price_max,
+  price_note,
+  price_checked_at,
+  contact_info,
+  saved_snapshot,
+  research_checklist,
+  saved_reason,
+  private_memo,
+  saved_source,
+  saved_source_detail,
+  created_at,
+  updated_at
+`;
 
 const fetchUserBookmarkRows = async ({
   userId,
@@ -215,31 +247,7 @@ const fetchUserBookmarkRows = async ({
 }): Promise<UserBookmarkRow[]> => {
   let query = supabase
     .from(USER_BOOKMARKS_TABLE)
-    .select(
-      `
-      id,
-      user_id,
-      account_id,
-      priority,
-      personal_rating,
-      candidate_readiness,
-      risk_level,
-      risk_notes,
-      estimated_price_min,
-      estimated_price_max,
-      price_note,
-      price_checked_at,
-      contact_info,
-      saved_snapshot,
-      research_checklist,
-      saved_reason,
-      private_memo,
-      saved_source,
-      saved_source_detail,
-      created_at,
-      updated_at
-    `
-    )
+    .select(USER_BOOKMARK_SELECT)
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
 
@@ -256,62 +264,37 @@ const fetchUserBookmarkRows = async ({
   return (data as UserBookmarkRow[]) ?? [];
 };
 
-const fetchExistingUserBookmark = async ({
-  userId,
-  accountId,
-}: BookmarkMutationPayload): Promise<UserBookmarkRow | null> => {
-  const rows = await fetchUserBookmarkRows({
-    userId,
-    accountIds: [accountId],
-  });
-
-  return rows[0] ?? null;
-};
-
 const ensureUserBookmark = async ({
   userId,
   accountId,
 }: BookmarkMutationPayload): Promise<UserBookmarkRow> => {
-  const existing = await fetchExistingUserBookmark({
-    userId,
-    accountId,
-  });
+  const { data: existingBookmark, error: existingBookmarkError } = await supabase
+    .from(USER_BOOKMARKS_TABLE)
+    .select(USER_BOOKMARK_SELECT)
+    .eq("user_id", userId)
+    .eq("account_id", accountId)
+    .maybeSingle();
 
-  if (existing) {
-    return existing;
+  if (existingBookmarkError) {
+    throwUserBookmarksError(existingBookmarkError);
+  }
+
+  if (existingBookmark) {
+    return existingBookmark as UserBookmarkRow;
   }
 
   const { data, error } = await supabase
     .from(USER_BOOKMARKS_TABLE)
-    .insert({
-      user_id: userId,
-      account_id: accountId,
-    })
-    .select(
-      `
-      id,
-      user_id,
-      account_id,
-      priority,
-      personal_rating,
-      candidate_readiness,
-      risk_level,
-      risk_notes,
-      estimated_price_min,
-      estimated_price_max,
-      price_note,
-      price_checked_at,
-      contact_info,
-      saved_snapshot,
-      research_checklist,
-      saved_reason,
-      private_memo,
-      saved_source,
-      saved_source_detail,
-      created_at,
-      updated_at
-    `
+    .upsert(
+      {
+        user_id: userId,
+        account_id: accountId,
+      },
+      {
+        onConflict: "user_id,account_id",
+      }
     )
+    .select(USER_BOOKMARK_SELECT)
     .single();
 
   if (error) {
@@ -319,6 +302,30 @@ const ensureUserBookmark = async ({
   }
 
   return data as UserBookmarkRow;
+};
+
+const upsertUserBookmarkFields = async ({
+  userId,
+  accountId,
+  fields,
+}: BookmarkMutationPayload & {
+  fields: Partial<UserBookmarkRow>;
+}) => {
+  const { error } = await supabase.from(USER_BOOKMARKS_TABLE).upsert(
+    {
+      user_id: userId,
+      account_id: accountId,
+      ...fields,
+      updated_at: new Date().toISOString(),
+    },
+    {
+      onConflict: "user_id,account_id",
+    }
+  );
+
+  if (error) {
+    throwUserBookmarksError(error);
+  }
 };
 
 const fetchBookmarkIdLookup = async ({
@@ -352,8 +359,23 @@ const fetchBookmarkIdLookup = async ({
   };
 };
 
+const isUserBookmarksPersistenceError = (error: unknown) => {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  const schemaError = error as SupabaseErrorLike;
+
+  return (
+    isMissingSchemaObjectError(schemaError, USER_BOOKMARK_TABLE_IDENTIFIERS) ||
+    isMissingSchemaObjectError(schemaError, USER_BOOKMARK_IDENTIFIERS)
+  );
+};
+
 const normalizeBookmarkRows = ({
   rows,
+  metricsByAccount,
+  activityByAccount,
   orderedAccountIds,
   ratingByAccount,
   readinessByAccount,
@@ -365,6 +387,8 @@ const normalizeBookmarkRows = ({
   researchChecklistByAccount,
 }: {
   rows: SnsAccountBookmarkRow[];
+  metricsByAccount: Map<number, BookmarkMetricsRow | null>;
+  activityByAccount: Map<number, LatestActivityRow>;
   orderedAccountIds: number[];
   ratingByAccount: Map<number, 1 | 2 | 3 | 4 | 5 | null>;
   readinessByAccount: Map<number, BookmarkReadinessValue>;
@@ -389,12 +413,12 @@ const normalizeBookmarkRows = ({
       gender: row.gender,
       keywords: row.keywords,
       profile_image_url: row.profile_image_url,
-      accounts_metrics: pickLatestMetric(row.accounts_metrics),
+      accounts_metrics: metricsByAccount.get(row.id) ?? null,
       last_profile_scraped_at: row.last_profile_scraped_at,
       hasUserBookmark: true,
 
-      latest_posted_at: null,
-      latest_activity_at: null,
+      latest_posted_at: activityByAccount.get(row.id)?.latest_posted_at ?? null,
+      latest_activity_at: activityByAccount.get(row.id)?.latest_activity_at ?? null,
       folderIds: [],
       tagIds: [],
       priority: null,
@@ -431,46 +455,6 @@ const normalizeBookmarkRows = ({
         (orderByAccountId.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
         (orderByAccountId.get(b.id) ?? Number.MAX_SAFE_INTEGER)
     );
-};
-
-const attachBookmarkPostActivity = (
-  influencers: BookmarkedInfluencer[],
-  postRows: BookmarkPostActivityRow[]
-): BookmarkedInfluencer[] => {
-  const activityByAccount = new Map<
-    number,
-    {
-      latest_posted_at: string | null;
-      latest_activity_at: string | null;
-    }
-  >();
-
-  postRows.forEach((post) => {
-    const current = activityByAccount.get(post.account_id) ?? {
-      latest_posted_at: null,
-      latest_activity_at: null,
-    };
-
-    if (bookmarkTimestampToMs(post.posted_at) > bookmarkTimestampToMs(current.latest_posted_at)) {
-      current.latest_posted_at = post.posted_at;
-    }
-
-    const newestActivity =
-      bookmarkTimestampToMs(post.scraped_at) > bookmarkTimestampToMs(post.posted_at)
-        ? post.scraped_at
-        : post.posted_at;
-
-    if (bookmarkTimestampToMs(newestActivity) > bookmarkTimestampToMs(current.latest_activity_at)) {
-      current.latest_activity_at = newestActivity;
-    }
-
-    activityByAccount.set(post.account_id, current);
-  });
-
-  return influencers.map((influencer) => ({
-    ...influencer,
-    ...(activityByAccount.get(influencer.id) ?? {}),
-  }));
 };
 
 const mapSavedSource = (row: UserBookmarkRow): BookmarkSavedSource | null => {
@@ -516,6 +500,8 @@ export const fetchBookmarkedInfluencers = async (userId: string) => {
   const contactInfoByAccount = new Map<number, BookmarkContactInfo>();
   const savedSnapshotByAccount = new Map<number, BookmarkSavedSnapshot | null>();
   const researchChecklistByAccount = new Map<number, BookmarkResearchChecklist>();
+  const metricsByAccount = new Map<number, BookmarkMetricsRow | null>();
+  const activityByAccount = new Map<number, LatestActivityRow>();
 
   bookmarkRows.forEach((row) => {
     ratingByAccount.set(row.account_id, (row.personal_rating as 1 | 2 | 3 | 4 | 5 | null) ?? null);
@@ -541,22 +527,58 @@ export const fetchBookmarkedInfluencers = async (userId: string) => {
       gender,
       keywords,
       profile_image_url,
-      last_profile_scraped_at,
-      accounts_metrics(maximum_likes, posts, followers, metric_date)
+      last_profile_scraped_at
     `
     )
-    .in("id", accountIds)
-    .order("metric_date", {
-      foreignTable: "accounts_metrics",
-      ascending: false,
-    });
+    .in("id", accountIds);
 
   if (error) {
     throwReadableError(error);
   }
 
+  const [{ data: metricRows, error: metricError }, { data: activityRows, error: activityError }] =
+    await Promise.all([
+      supabase
+        .from("latest_account_metrics")
+        .select("account_id, maximum_likes, posts, followers, metric_date")
+        .in("account_id", accountIds),
+      supabase
+        .from("influencer_latest_activity")
+        .select("account_id, latest_posted_at, latest_activity_at")
+        .in("account_id", accountIds),
+    ]);
+
+  if (metricError) {
+    throwReadableError(metricError);
+  }
+
+  ((metricRows as LatestAccountMetricRow[] | null) ?? []).forEach((row) => {
+    if (row.account_id === null) return;
+
+    metricsByAccount.set(row.account_id, {
+      maximum_likes: row.maximum_likes,
+      posts: row.posts,
+      followers: row.followers,
+      metric_date: row.metric_date,
+    });
+  });
+
+  if (activityError) {
+    console.error("Failed to load bookmark activity summary", {
+      accountIds,
+      error: activityError,
+    });
+  } else {
+    ((activityRows as LatestActivityRow[] | null) ?? []).forEach((row) => {
+      if (row.account_id === null) return;
+      activityByAccount.set(row.account_id, row);
+    });
+  }
+
   const normalized = normalizeBookmarkRows({
     rows: (data as SnsAccountBookmarkRow[]) ?? [],
+    metricsByAccount,
+    activityByAccount,
     orderedAccountIds: accountIds,
     ratingByAccount,
     readinessByAccount,
@@ -572,22 +594,7 @@ export const fetchBookmarkedInfluencers = async (userId: string) => {
     return [];
   }
 
-  const { data: postData, error: postError } = await supabase
-    .from("posts")
-    .select("account_id, posted_at, scraped_at")
-    .in(
-      "account_id",
-      normalized.map((row) => row.id)
-    );
-
-  if (postError) {
-    return normalized;
-  }
-
-  return attachBookmarkPostActivity(
-    normalized,
-    (postData as BookmarkPostActivityRow[]) ?? []
-  );
+  return normalized;
 };
 
 export const addUserBookmark = async ({
@@ -623,7 +630,7 @@ export const fetchBookmarkFolders = async (userId: string) => {
     .order("created_at", { ascending: true });
 
   if (error) {
-    if (isMissingPersistenceObject(error)) {
+    if (isMissingPersistenceObject(error, [BOOKMARK_FOLDERS_TABLE])) {
       return { folders: [] as BookmarkFolder[], persistenceReady: false };
     }
 
@@ -650,7 +657,7 @@ export const createBookmarkFolder = async ({
     .single();
 
   if (error) {
-    if (isMissingPersistenceObject(error)) {
+    if (isMissingPersistenceObject(error, [BOOKMARK_FOLDERS_TABLE])) {
       throw new Error(
         "フォルダーを保存するには、bookmark_folders のマイグレーションをSupabaseへ反映してください。"
       );
@@ -684,7 +691,7 @@ export const fetchBookmarkFolderItems = async ({
     .in("bookmark_id", bookmarkIds);
 
   if (error) {
-    if (isMissingPersistenceObject(error)) {
+    if (isMissingPersistenceObject(error, [BOOKMARK_FOLDER_ITEMS_TABLE, "bookmark_id"])) {
       return { items: [] as BookmarkFolderItem[], persistenceReady: false };
     }
 
@@ -727,34 +734,18 @@ export const addInfluencerToBookmarkFolder = async ({
     accountId,
   });
 
-  const { data: existingItem, error: lookupError } = await supabase
-    .from(BOOKMARK_FOLDER_ITEMS_TABLE)
-    .select("id")
-    .eq("folder_id", folderId)
-    .eq("bookmark_id", bookmark.id)
-    .maybeSingle();
-
-  if (lookupError) {
-    if (isMissingPersistenceObject(lookupError)) {
-      throw new Error(
-        "フォルダーを使うには、bookmark_folder_items のマイグレーションをSupabaseへ反映してください。"
-      );
+  const { error } = await supabase.from(BOOKMARK_FOLDER_ITEMS_TABLE).upsert(
+    {
+      folder_id: folderId,
+      bookmark_id: bookmark.id,
+    },
+    {
+      onConflict: "folder_id,bookmark_id",
     }
-
-    throw new Error(readableSupabaseError(lookupError));
-  }
-
-  if (existingItem) {
-    return;
-  }
-
-  const { error } = await supabase.from(BOOKMARK_FOLDER_ITEMS_TABLE).insert({
-    folder_id: folderId,
-    bookmark_id: bookmark.id,
-  });
+  );
 
   if (error) {
-    if (isMissingPersistenceObject(error)) {
+    if (isMissingPersistenceObject(error, [BOOKMARK_FOLDER_ITEMS_TABLE, "bookmark_id"])) {
       throw new Error(
         "フォルダーを使うには、bookmark_folder_items のマイグレーションをSupabaseへ反映してください。"
       );
@@ -789,7 +780,7 @@ export const removeInfluencerFromBookmarkFolder = async ({
     .eq("bookmark_id", bookmark.id);
 
   if (error) {
-    if (isMissingPersistenceObject(error)) {
+    if (isMissingPersistenceObject(error, [BOOKMARK_FOLDER_ITEMS_TABLE, "bookmark_id"])) {
       throw new Error(
         "フォルダーを使うには、bookmark_folder_items のマイグレーションをSupabaseへ反映してください。"
       );
@@ -807,7 +798,7 @@ export const fetchBookmarkTags = async (userId: string) => {
     .order("created_at", { ascending: true });
 
   if (error) {
-    if (isMissingPersistenceObject(error)) {
+    if (isMissingPersistenceObject(error, [BOOKMARK_TAGS_TABLE])) {
       return { tags: [] as BookmarkTag[], persistenceReady: false };
     }
 
@@ -834,7 +825,7 @@ export const createBookmarkTag = async ({
     .single();
 
   if (error) {
-    if (isMissingPersistenceObject(error)) {
+    if (isMissingPersistenceObject(error, [BOOKMARK_TAGS_TABLE])) {
       throw new Error(
         "タグを保存するには、bookmark_tags のマイグレーションをSupabaseへ反映してください。"
       );
@@ -868,7 +859,7 @@ export const fetchBookmarkTagItems = async ({
     .in("bookmark_id", bookmarkIds);
 
   if (error) {
-    if (isMissingPersistenceObject(error)) {
+    if (isMissingPersistenceObject(error, [BOOKMARK_TAG_ITEMS_TABLE, "bookmark_id"])) {
       return { items: [] as BookmarkTagItem[], persistenceReady: false };
     }
 
@@ -911,34 +902,18 @@ export const addInfluencerToBookmarkTag = async ({
     accountId,
   });
 
-  const { data: existingItem, error: lookupError } = await supabase
-    .from(BOOKMARK_TAG_ITEMS_TABLE)
-    .select("id")
-    .eq("tag_id", tagId)
-    .eq("bookmark_id", bookmark.id)
-    .maybeSingle();
-
-  if (lookupError) {
-    if (isMissingPersistenceObject(lookupError)) {
-      throw new Error(
-        "タグを使うには、bookmark_tag_items のマイグレーションをSupabaseへ反映してください。"
-      );
+  const { error } = await supabase.from(BOOKMARK_TAG_ITEMS_TABLE).upsert(
+    {
+      tag_id: tagId,
+      bookmark_id: bookmark.id,
+    },
+    {
+      onConflict: "tag_id,bookmark_id",
     }
-
-    throw new Error(readableSupabaseError(lookupError));
-  }
-
-  if (existingItem) {
-    return;
-  }
-
-  const { error } = await supabase.from(BOOKMARK_TAG_ITEMS_TABLE).insert({
-    tag_id: tagId,
-    bookmark_id: bookmark.id,
-  });
+  );
 
   if (error) {
-    if (isMissingPersistenceObject(error)) {
+    if (isMissingPersistenceObject(error, [BOOKMARK_TAG_ITEMS_TABLE, "bookmark_id"])) {
       throw new Error(
         "タグを使うには、bookmark_tag_items のマイグレーションをSupabaseへ反映してください。"
       );
@@ -973,7 +948,7 @@ export const removeInfluencerFromBookmarkTag = async ({
     .eq("bookmark_id", bookmark.id);
 
   if (error) {
-    if (isMissingPersistenceObject(error)) {
+    if (isMissingPersistenceObject(error, [BOOKMARK_TAG_ITEMS_TABLE, "bookmark_id"])) {
       throw new Error(
         "タグを使うには、bookmark_tag_items のマイグレーションをSupabaseへ反映してください。"
       );
@@ -1019,12 +994,7 @@ export const fetchBookmarkPriorities = async ({
       persistenceReady: true,
     };
   } catch (error) {
-    if (
-      typeof error === "object" &&
-      error &&
-      "message" in error &&
-      String((error as { message?: unknown }).message).includes("user_bookmarks")
-    ) {
+    if (isUserBookmarksPersistenceError(error)) {
       return { priorities: [] as BookmarkPriority[], persistenceReady: false };
     }
 
@@ -1066,12 +1036,7 @@ export const fetchBookmarkReadinesses = async ({
       persistenceReady: true,
     };
   } catch (error) {
-    if (
-      typeof error === "object" &&
-      error &&
-      "message" in error &&
-      String((error as { message?: unknown }).message).includes("user_bookmarks")
-    ) {
+    if (isUserBookmarksPersistenceError(error)) {
       return { readinesses: [] as BookmarkReadiness[], persistenceReady: false };
     }
 
@@ -1114,12 +1079,7 @@ export const fetchBookmarkRiskProfiles = async ({
       persistenceReady: true,
     };
   } catch (error) {
-    if (
-      typeof error === "object" &&
-      error &&
-      "message" in error &&
-      String((error as { message?: unknown }).message).includes("user_bookmarks")
-    ) {
+    if (isUserBookmarksPersistenceError(error)) {
       return { riskProfiles: [] as BookmarkRiskProfile[], persistenceReady: false };
     }
 
@@ -1136,28 +1096,13 @@ export const setBookmarkPriority = async ({
   accountId: number;
   priority: BookmarkPriorityValue;
 }) => {
-  const existing = await fetchExistingUserBookmark({
+  await upsertUserBookmarkFields({
     userId,
     accountId,
+    fields: {
+      priority,
+    },
   });
-
-  const { error } = existing
-    ? await supabase
-        .from(USER_BOOKMARKS_TABLE)
-        .update({
-          priority,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", existing.id)
-    : await supabase.from(USER_BOOKMARKS_TABLE).insert({
-        user_id: userId,
-        account_id: accountId,
-        priority,
-      });
-
-  if (error) {
-    throwUserBookmarksError(error);
-  }
 };
 
 export const clearBookmarkPriority = async ({
@@ -1167,18 +1112,13 @@ export const clearBookmarkPriority = async ({
   userId: string;
   accountId: number;
 }) => {
-  const { error } = await supabase
-    .from(USER_BOOKMARKS_TABLE)
-    .update({
+  await upsertUserBookmarkFields({
+    userId,
+    accountId,
+    fields: {
       priority: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("user_id", userId)
-    .eq("account_id", accountId);
-
-  if (error) {
-    throwUserBookmarksError(error);
-  }
+    },
+  });
 };
 
 export const fetchBookmarkMemos = async ({
@@ -1217,12 +1157,7 @@ export const fetchBookmarkMemos = async ({
       persistenceReady: true,
     };
   } catch (error) {
-    if (
-      typeof error === "object" &&
-      error &&
-      "message" in error &&
-      String((error as { message?: unknown }).message).includes("user_bookmarks")
-    ) {
+    if (isUserBookmarksPersistenceError(error)) {
       return { memos: [] as BookmarkMemo[], persistenceReady: false };
     }
 
@@ -1242,44 +1177,24 @@ export const saveBookmarkMemo = async ({
   const trimmedMemo = memo.trim();
 
   if (!trimmedMemo) {
-    const { error } = await supabase
-      .from(USER_BOOKMARKS_TABLE)
-      .update({
+    await upsertUserBookmarkFields({
+      userId,
+      accountId,
+      fields: {
         saved_reason: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("user_id", userId)
-      .eq("account_id", accountId);
-
-    if (error) {
-      throwUserBookmarksError(error);
-    }
+      },
+    });
 
     return "";
   }
 
-  const existing = await fetchExistingUserBookmark({
+  await upsertUserBookmarkFields({
     userId,
     accountId,
+    fields: {
+      saved_reason: trimmedMemo,
+    },
   });
-
-  const { error } = existing
-    ? await supabase
-        .from(USER_BOOKMARKS_TABLE)
-        .update({
-          saved_reason: trimmedMemo,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", existing.id)
-    : await supabase.from(USER_BOOKMARKS_TABLE).insert({
-        user_id: userId,
-        account_id: accountId,
-        saved_reason: trimmedMemo,
-      });
-
-  if (error) {
-    throwUserBookmarksError(error);
-  }
 
   return trimmedMemo;
 };
@@ -1310,12 +1225,7 @@ export const fetchBookmarkSources = async ({
       persistenceReady: true,
     };
   } catch (error) {
-    if (
-      typeof error === "object" &&
-      error &&
-      "message" in error &&
-      String((error as { message?: unknown }).message).includes("user_bookmarks")
-    ) {
+    if (isUserBookmarksPersistenceError(error)) {
       return { sources: [] as BookmarkSavedSource[], persistenceReady: false };
     }
 
@@ -1332,28 +1242,13 @@ export const setBookmarkRating = async ({
   accountId: number;
   rating: 1 | 2 | 3 | 4 | 5;
 }) => {
-  const existing = await fetchExistingUserBookmark({
+  await upsertUserBookmarkFields({
     userId,
     accountId,
+    fields: {
+      personal_rating: rating,
+    },
   });
-
-  const { error } = existing
-    ? await supabase
-        .from(USER_BOOKMARKS_TABLE)
-        .update({
-          personal_rating: rating,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", existing.id)
-    : await supabase.from(USER_BOOKMARKS_TABLE).insert({
-        user_id: userId,
-        account_id: accountId,
-        personal_rating: rating,
-      });
-
-  if (error) {
-    throwUserBookmarksError(error);
-  }
 };
 
 export const clearBookmarkRating = async ({
@@ -1363,18 +1258,13 @@ export const clearBookmarkRating = async ({
   userId: string;
   accountId: number;
 }) => {
-  const { error } = await supabase
-    .from(USER_BOOKMARKS_TABLE)
-    .update({
+  await upsertUserBookmarkFields({
+    userId,
+    accountId,
+    fields: {
       personal_rating: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("user_id", userId)
-    .eq("account_id", accountId);
-
-  if (error) {
-    throwUserBookmarksError(error);
-  }
+    },
+  });
 };
 
 export const setBookmarkReadiness = async ({
@@ -1386,28 +1276,13 @@ export const setBookmarkReadiness = async ({
   accountId: number;
   readiness: BookmarkReadinessValue;
 }) => {
-  const existing = await fetchExistingUserBookmark({
+  await upsertUserBookmarkFields({
     userId,
     accountId,
+    fields: {
+      candidate_readiness: readiness,
+    },
   });
-
-  const { error } = existing
-    ? await supabase
-        .from(USER_BOOKMARKS_TABLE)
-        .update({
-          candidate_readiness: readiness,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", existing.id)
-    : await supabase.from(USER_BOOKMARKS_TABLE).insert({
-        user_id: userId,
-        account_id: accountId,
-        candidate_readiness: readiness,
-      });
-
-  if (error) {
-    throwUserBookmarksError(error);
-  }
 };
 
 export const saveBookmarkRiskProfile = async ({
@@ -1421,30 +1296,14 @@ export const saveBookmarkRiskProfile = async ({
   riskLevel: BookmarkRiskLevelValue;
   riskNotes: string;
 }) => {
-  const existing = await fetchExistingUserBookmark({
+  await upsertUserBookmarkFields({
     userId,
     accountId,
+    fields: {
+      risk_level: riskLevel,
+      risk_notes: riskNotes,
+    },
   });
-
-  const { error } = existing
-    ? await supabase
-        .from(USER_BOOKMARKS_TABLE)
-        .update({
-          risk_level: riskLevel,
-          risk_notes: riskNotes,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", existing.id)
-    : await supabase.from(USER_BOOKMARKS_TABLE).insert({
-        user_id: userId,
-        account_id: accountId,
-        risk_level: riskLevel,
-        risk_notes: riskNotes,
-      });
-
-  if (error) {
-    throwUserBookmarksError(error);
-  }
 
   return {
     riskLevel,
@@ -1465,30 +1324,18 @@ export const saveBookmarkPriceMemory = async ({
   estimated_price_max: number | null;
   price_note: string;
 }) => {
-  const existing = await fetchExistingUserBookmark({
-    userId,
-    accountId,
-  });
-
   const payload = {
     estimated_price_min,
     estimated_price_max,
     price_note,
     price_checked_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
   };
 
-  const { error } = existing
-    ? await supabase.from(USER_BOOKMARKS_TABLE).update(payload).eq("id", existing.id)
-    : await supabase.from(USER_BOOKMARKS_TABLE).insert({
-        user_id: userId,
-        account_id: accountId,
-        ...payload,
-      });
-
-  if (error) {
-    throwUserBookmarksError(error);
-  }
+  await upsertUserBookmarkFields({
+    userId,
+    accountId,
+    fields: payload,
+  });
 
   return {
     estimated_price_min,
@@ -1507,28 +1354,13 @@ export const saveBookmarkContactInfo = async ({
   accountId: number;
   contactInfo: BookmarkContactInfo;
 }) => {
-  const existing = await fetchExistingUserBookmark({
+  await upsertUserBookmarkFields({
     userId,
     accountId,
+    fields: {
+      contact_info: contactInfo,
+    },
   });
-
-  const { error } = existing
-    ? await supabase
-        .from(USER_BOOKMARKS_TABLE)
-        .update({
-          contact_info: contactInfo,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", existing.id)
-    : await supabase.from(USER_BOOKMARKS_TABLE).insert({
-        user_id: userId,
-        account_id: accountId,
-        contact_info: contactInfo,
-      });
-
-  if (error) {
-    throwUserBookmarksError(error);
-  }
 
   return contactInfo;
 };
@@ -1542,28 +1374,13 @@ export const saveBookmarkSavedSnapshot = async ({
   accountId: number;
   snapshot: BookmarkSavedSnapshot;
 }) => {
-  const existing = await fetchExistingUserBookmark({
+  await upsertUserBookmarkFields({
     userId,
     accountId,
+    fields: {
+      saved_snapshot: snapshot,
+    },
   });
-
-  const { error } = existing
-    ? await supabase
-        .from(USER_BOOKMARKS_TABLE)
-        .update({
-          saved_snapshot: snapshot,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", existing.id)
-    : await supabase.from(USER_BOOKMARKS_TABLE).insert({
-        user_id: userId,
-        account_id: accountId,
-        saved_snapshot: snapshot,
-      });
-
-  if (error) {
-    throwUserBookmarksError(error);
-  }
 
   return snapshot;
 };
@@ -1577,28 +1394,13 @@ export const saveBookmarkResearchChecklist = async ({
   accountId: number;
   checklist: BookmarkResearchChecklist;
 }) => {
-  const existing = await fetchExistingUserBookmark({
+  await upsertUserBookmarkFields({
     userId,
     accountId,
+    fields: {
+      research_checklist: checklist,
+    },
   });
-
-  const { error } = existing
-    ? await supabase
-        .from(USER_BOOKMARKS_TABLE)
-        .update({
-          research_checklist: checklist,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", existing.id)
-    : await supabase.from(USER_BOOKMARKS_TABLE).insert({
-        user_id: userId,
-        account_id: accountId,
-        research_checklist: checklist,
-      });
-
-  if (error) {
-    throwUserBookmarksError(error);
-  }
 
   return checklist;
 };

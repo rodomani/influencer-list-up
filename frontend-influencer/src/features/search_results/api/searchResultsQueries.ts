@@ -1,23 +1,29 @@
 import { supabase } from "@/lib/supabase";
+import { readableSupabaseError, type SupabaseErrorLike } from "@/lib/supabaseErrors";
 import type {
   CampaignOption,
   Filters,
   InfluencerNormalized,
-  InfluencerRowFromDB,
   MetricsRow,
-  PostActivityRow,
+  SortOption,
 } from "../types";
-import { daysBetween, timestampToMs } from "../logic/formatters";
 
-type SupabaseErrorLike = {
-  message?: string;
-  details?: string;
-  hint?: string;
-  code?: string;
-};
-
-type SearchInfluencerRowFromDB = Omit<InfluencerRowFromDB, "bookmarks"> & {
-  bookmarks?: string[] | null;
+type SearchInfluencerRpcRow = {
+  id: number;
+  platform: string;
+  account_name: string;
+  gender: string | null;
+  keywords: string | null;
+  profile_image_url: string | null;
+  followers: number | null;
+  posts: number | null;
+  maximum_likes: number | null;
+  metric_date: string | null;
+  latest_posted_at: string | null;
+  latest_activity_at: string | null;
+  posting_span_days: number | null;
+  bookmark_count: number | null;
+  total_count: number | null;
 };
 
 type BookmarkSourcePayload = {
@@ -34,21 +40,6 @@ type BookmarkMutationPayload = {
   userId: string;
   accountId: number;
   source?: BookmarkSourceInput | null;
-};
-
-const readableSupabaseError = (error: SupabaseErrorLike | null | undefined) => {
-  if (!error) return "Supabase request failed.";
-
-  const message = [
-    error.message,
-    error.details,
-    error.hint,
-    error.code ? `code: ${error.code}` : null,
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  return message || "Supabase request failed.";
 };
 
 const throwUserBookmarksError = (error: SupabaseErrorLike) => {
@@ -69,19 +60,8 @@ const throwUserBookmarksError = (error: SupabaseErrorLike) => {
   throw new Error(message);
 };
 
-const pickLatest = (metrics: MetricsRow[] | null | undefined): MetricsRow | null =>
-  Array.isArray(metrics) && metrics.length > 0 ? metrics[0] : null;
-
-const normalizeMetric = (value: number | null | undefined) => {
-  if (value == null) return 0;
-  if (value < 0) return 0;
-  return value;
-};
-
-const within = (value: number, min: number, max: number) => value >= min && value <= max;
-
 const normalizeInfluencerRows = (
-  rows: SearchInfluencerRowFromDB[]
+  rows: SearchInfluencerRpcRow[]
 ): InfluencerNormalized[] =>
   rows.map((row) => ({
     id: row.id,
@@ -90,12 +70,18 @@ const normalizeInfluencerRows = (
     gender: row.gender,
     keywords: row.keywords,
     profile_image_url: row.profile_image_url,
-    accounts_metrics: pickLatest(row.accounts_metrics),
-
-    // Important:
-    // This is now only a frontend compatibility field.
-    // It no longer comes from sns_accounts.bookmarks.
-    bookmarks: [],
+    accounts_metrics: {
+      maximum_likes: row.maximum_likes,
+      posts: row.posts,
+      followers: row.followers,
+      metric_date: row.metric_date,
+    } as MetricsRow,
+    latest_posted_at: row.latest_posted_at,
+    latest_activity_at: row.latest_activity_at,
+    posting_span_days: row.posting_span_days ?? undefined,
+    bookmark_count: row.bookmark_count ?? 0,
+    hasUserBookmark: false,
+    bookmarkId: undefined,
   }));
 
 const attachUserBookmarkState = async (
@@ -105,7 +91,7 @@ const attachUserBookmarkState = async (
   if (!userId || influencers.length === 0) {
     return influencers.map((influencer) => ({
       ...influencer,
-      bookmarks: [],
+      hasUserBookmark: false,
     }));
   }
 
@@ -113,7 +99,7 @@ const attachUserBookmarkState = async (
 
   const { data, error } = await supabase
     .from("user_bookmarks")
-    .select("account_id")
+    .select("id, account_id")
     .eq("user_id", userId)
     .in("account_id", accountIds);
 
@@ -121,78 +107,74 @@ const attachUserBookmarkState = async (
     throwUserBookmarksError(error);
   }
 
-  const bookmarkedAccountIds = new Set(
-    (data ?? []).map((row) => Number(row.account_id))
+  const bookmarkIdByAccountId = new Map(
+    (data ?? []).map((row) => [Number(row.account_id), Number(row.id)])
   );
 
   return influencers.map((influencer) => ({
     ...influencer,
-    bookmarks: bookmarkedAccountIds.has(influencer.id) ? [userId] : [],
+    hasUserBookmark: bookmarkIdByAccountId.has(influencer.id),
+    bookmarkId: bookmarkIdByAccountId.get(influencer.id),
   }));
 };
 
-const attachPostActivity = (
-  influencers: InfluencerNormalized[],
-  postRows: PostActivityRow[]
-): InfluencerNormalized[] => {
-  const activityByAccount = new Map<
-    number,
-    {
-      latest_posted_at: string | null;
-      latest_activity_at: string | null;
-      first_posted_at: string | null;
-    }
-  >();
+export type SearchInfluencersParams = {
+  platforms: string[];
+  username?: string;
+  keywords?: string[];
+  minFollowers?: number;
+  maxFollowers?: number;
+  minLikes?: number;
+  maxLikes?: number;
+  minPosts?: number;
+  maxPosts?: number;
+  sort: SortOption;
+  page: number;
+  pageSize: number;
+};
 
-  postRows.forEach((post) => {
-    const current = activityByAccount.get(post.account_id) ?? {
-      latest_posted_at: null,
-      latest_activity_at: null,
-      first_posted_at: null,
-    };
+export type SearchInfluencersResult = {
+  influencers: InfluencerNormalized[];
+  totalCount: number;
+};
 
-    if (timestampToMs(post.posted_at) > timestampToMs(current.latest_posted_at)) {
-      current.latest_posted_at = post.posted_at;
-    }
-
-    if (
-      post.posted_at &&
-      (!current.first_posted_at ||
-        timestampToMs(post.posted_at) < timestampToMs(current.first_posted_at))
-    ) {
-      current.first_posted_at = post.posted_at;
-    }
-
-    const newestActivity =
-      timestampToMs(post.scraped_at) > timestampToMs(post.posted_at)
-        ? post.scraped_at
-        : post.posted_at;
-
-    if (timestampToMs(newestActivity) > timestampToMs(current.latest_activity_at)) {
-      current.latest_activity_at = newestActivity;
-    }
-
-    activityByAccount.set(post.account_id, current);
+export const searchInfluencers = async (
+  params: SearchInfluencersParams,
+  userId?: string
+): Promise<SearchInfluencersResult> => {
+  const { data, error } = await supabase.rpc("search_influencers", {
+    p_platforms: params.platforms,
+    p_username: params.username?.trim() || null,
+    p_keywords: params.keywords?.length ? params.keywords : null,
+    p_min_followers: params.minFollowers ?? null,
+    p_max_followers: params.maxFollowers ?? null,
+    p_min_likes: params.minLikes ?? null,
+    p_max_likes: params.maxLikes ?? null,
+    p_min_posts: params.minPosts ?? null,
+    p_max_posts: params.maxPosts ?? null,
+    p_sort: params.sort,
+    p_limit: params.pageSize,
+    p_offset: Math.max(0, (params.page - 1) * params.pageSize),
   });
 
-  return influencers.map((row) => {
-    const activity = activityByAccount.get(row.id);
+  if (error) {
+    throw new Error(readableSupabaseError(error));
+  }
 
-    return {
-      ...row,
-      ...activity,
-      posting_span_days: daysBetween(
-        activity?.first_posted_at,
-        activity?.latest_posted_at
-      ),
-    };
-  });
+  const rows = (data as SearchInfluencerRpcRow[] | null) ?? [];
+  const totalCount = rows[0]?.total_count ?? 0;
+  const normalized = normalizeInfluencerRows(rows);
+
+  return {
+    influencers: await attachUserBookmarkState(normalized, userId),
+    totalCount,
+  };
 };
 
 export const fetchCampaignOptions = async (userId: string) => {
   const { data, error } = await supabase
     .from("campaigns")
-    .select("id, name, influencers")
+    .select("id, name")
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
 
@@ -205,111 +187,40 @@ export const fetchCampaignOptions = async (userId: string) => {
 
 export const fetchSearchResults = async (
   filters: Filters,
-  userId?: string
-): Promise<InfluencerNormalized[]> => {
+  userId: string | undefined,
+  sort: SortOption,
+  page: number,
+  pageSize: number
+): Promise<SearchInfluencersResult> => {
   const [likeMin, likeMax] = filters.likes ?? [0, 10_000_000];
   const [postMin, postMax] = filters.posts ?? [0, 10_000_000];
   const [followerMin, followerMax] = filters.followers ?? [0, 10_000_000];
 
-  let query = supabase
-    .from("sns_accounts")
-    .select(
-      `
-      id,
-      platform,
-      account_name,
-      gender,
-      keywords,
-      profile_image_url,
-      accounts_metrics(maximum_likes, posts, followers, metric_date)
-    `
-    )
-    .order("metric_date", {
-      foreignTable: "accounts_metrics",
-      ascending: false,
-    });
-
-  if (filters.platforms?.length) {
-    const orPlatforms = filters.platforms
-      .map((platform) => `platform.ilike.%${platform}%`)
-      .join(",");
-
-    query = query.or(orPlatforms);
-  }
-
-  if (filters.username?.trim()) {
-    query = query.ilike("account_name", `%${filters.username.trim()}%`);
-  }
-
-  if (filters.gender?.trim()) {
-    query = query.ilike("gender", `%${filters.gender.trim()}%`);
-  }
-
-  if (filters.keywords?.length) {
-    const orKeywords = filters.keywords
-      .map((keyword) => `keywords.ilike.%${keyword}%`)
-      .join(",");
-
-    query = query.or(orKeywords);
-  }
-
-  const { data, error } = await query;
-
-  if (error) {
-    throw new Error(readableSupabaseError(error));
-  }
-
-  const normalized = normalizeInfluencerRows(
-    ((data as SearchInfluencerRowFromDB[]) ?? [])
+  return searchInfluencers(
+    {
+      platforms: filters.platforms,
+      username: filters.username,
+      keywords: filters.keywords,
+      minFollowers: followerMin,
+      maxFollowers: followerMax,
+      minLikes: likeMin,
+      maxLikes: likeMax,
+      minPosts: postMin,
+      maxPosts: postMax,
+      sort,
+      page,
+      pageSize,
+    },
+    userId
   );
-
-  const filtered = normalized.filter((row) => {
-    const metrics = row.accounts_metrics;
-    const likes = normalizeMetric(metrics?.maximum_likes);
-    const posts = normalizeMetric(metrics?.posts);
-    const followers = normalizeMetric(metrics?.followers);
-
-    return (
-      within(likes, likeMin, likeMax) &&
-      within(posts, postMin, postMax) &&
-      within(followers, followerMin, followerMax)
-    );
-  });
-
-  if (filtered.length === 0) {
-    return [];
-  }
-
-  const { data: postData, error: postError } = await supabase
-    .from("posts")
-    .select("account_id, posted_at, scraped_at")
-    .in(
-      "account_id",
-      filtered.map((row) => row.id)
-    );
-
-  if (postError) {
-    throw new Error(readableSupabaseError(postError));
-  }
-
-  const withPostActivity = attachPostActivity(
-    filtered,
-    (postData as PostActivityRow[]) ?? []
-  );
-
-  return attachUserBookmarkState(withPostActivity, userId);
 };
 
 export const updateCampaignInfluencers = async ({
   campaignId,
-  userId,
   accountId,
-  influencers,
 }: {
   campaignId: string;
-  userId: string;
   accountId: number;
-  influencers: string;
 }) => {
   const { error: relationError } = await supabase
     .from("campaign_influencers")
@@ -325,16 +236,6 @@ export const updateCampaignInfluencers = async ({
   if (relationError) {
     throw new Error(readableSupabaseError(relationError));
   }
-
-  const { error } = await supabase
-    .from("campaigns")
-    .update({ influencers })
-    .eq("id", campaignId)
-    .eq("user_id", userId);
-
-  if (error) {
-    throw new Error(readableSupabaseError(error));
-  }
 };
 
 export const addUserBookmark = async ({
@@ -342,7 +243,7 @@ export const addUserBookmark = async ({
   accountId,
   source,
 }: BookmarkMutationPayload) => {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from("user_bookmarks")
     .upsert(
       {
@@ -365,11 +266,19 @@ export const addUserBookmark = async ({
       {
         onConflict: "user_id,account_id",
       }
-    );
+    )
+    .select("id")
+    .single();
 
   if (error) {
     throwUserBookmarksError(error);
   }
+
+  if (!data) {
+    throw new Error("user_bookmarks row was not returned after upsert.");
+  }
+
+  return Number(data.id);
 };
 
 export const removeUserBookmark = async ({

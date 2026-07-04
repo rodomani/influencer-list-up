@@ -3,6 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useSearchPage } from "@/features/search_page/api/useSearchPage";
 import { SearchFilterPanel } from "@/features/search_page/components/SearchFilterPanel";
 import { SearchPageHero } from "@/features/search_page/components/SearchPageHero";
+import { serializeSearchFilters } from "@/features/search_results/logic/searchQueryParams";
 
 export function SearchScreen() {
   const navigate = useNavigate();
@@ -12,7 +13,8 @@ export function SearchScreen() {
   const handleSearch = () => {
     const filters = searchPage.buildSearchFilters();
     if (!filters) return;
-    navigate("/search/search_results", { state: { filters } });
+    const query = serializeSearchFilters(filters);
+    navigate(`/search/search_results${query ? `?${query}` : ""}`, { state: { filters } });
   };
 
   return (
